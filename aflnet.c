@@ -991,12 +991,19 @@ region_t* extract_requests_mqtt(unsigned char* buf, unsigned int buf_size, unsig
     else
       cur_end = buf_size;
     // Create a region for every request
-		region_count++;
-		regions = (region_t *)ck_realloc(regions, region_count * sizeof(region_t));
+		if (regions == NULL) {
+      regions = ck_alloc(sizeof(region_t));  // 第一次分配
+      region_count = 1;
+    } else {
+      region_count++;
+      regions = ck_realloc(regions, region_count * sizeof(region_t));
+    }
+
 		regions[region_count - 1].start_byte = cur_start - 2;
 		regions[region_count - 1].end_byte = cur_end;
 		regions[region_count - 1].state_sequence = NULL;
 		regions[region_count - 1].state_count = 0;
+    if (!regions) { FATAL("Out of memory"); }
     // Update the indices
     mem_count = 0;
     cur_start = cur_end + 1;
