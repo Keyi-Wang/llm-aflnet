@@ -32,6 +32,20 @@ CFLAGS     += -Wall -D_FORTIFY_SOURCE=2 -g -Wno-pointer-sign -Wno-unused-result 
 	      -DAFL_PATH=\"$(HELPER_PATH)\" -DDOC_PATH=\"$(DOC_PATH)\" \
 	      -DBIN_PATH=\"$(BIN_PATH)\"
 
+MQTT_SRC = llm/mqtt/mqtt_init.c \
+           llm/mqtt/mqtt_parser.c \
+           llm/mqtt/mqtt_mutators.c \
+           llm/mqtt/mqtt_fixers.c \
+           llm/mqtt/mqtt_reassembler.c
+MQTT_OBJ = $(MQTT_SRC:.c=.o)
+
+RTSP_SRC = llm/rtsp/rtsp_init.c \
+           llm/rtsp/rtsp_parser.c \
+           llm/rtsp/rtsp_mutators.c \
+           llm/rtsp/rtsp_fixers.c \
+           llm/rtsp/rtsp_reassembler.c
+RTSP_OBJ = $(RTSP_SRC:.c=.o)
+
 ifneq "$(filter Linux GNU%,$(shell uname))" ""
   LDFLAGS  += -ldl -lgvc -lcgraph -lm -lcap
 endif
@@ -69,8 +83,8 @@ afl-as: afl-as.c afl-as.h $(COMM_HDR) | test_x86
 	$(CC) $(CFLAGS) $@.c -o $@ $(LDFLAGS)
 	ln -sf afl-as as
 
-afl-fuzz: afl-fuzz.c $(COMM_HDR) aflnet.o aflnet.h | test_x86
-	$(CC) $(CFLAGS) $@.c aflnet.o -o $@ $(LDFLAGS)
+afl-fuzz: afl-fuzz.c $(COMM_HDR) aflnet.o aflnet.h $(MQTT_OBJ) $(RTSP_OBJ) | test_x86
+	$(CC) $(CFLAGS) $@.c aflnet.o $(MQTT_OBJ) $(RTSP_OBJ) -o $@ $(LDFLAGS)
 
 afl-replay: afl-replay.c $(COMM_HDR) aflnet.o aflnet.h | test_x86
 	$(CC) $(CFLAGS) $@.c aflnet.o -o $@ $(LDFLAGS)
@@ -118,6 +132,7 @@ all_done: test_build
 
 clean:
 	rm -f $(PROGS) afl-as as afl-g++ afl-clang afl-clang++ *.o *~ a.out core core.[1-9][0-9]* *.stackdump test .test test-instr .test-instr0 .test-instr1 qemu_mode/qemu-2.10.0.tar.bz2 afl-qemu-trace
+	find llm -name "*.o" -type f -delete
 	rm -rf out_dir qemu_mode/qemu-2.10.0
 	$(MAKE) -C llvm_mode clean
 	$(MAKE) -C libdislocator clean
@@ -157,3 +172,6 @@ publish: clean
 	cat docs/ChangeLog >~/www/afl/ChangeLog.txt
 	cat docs/QuickStartGuide.txt >~/www/afl/QuickStartGuide.txt
 	echo -n "$(VERSION)" >~/www/afl/version.txt
+
+
+

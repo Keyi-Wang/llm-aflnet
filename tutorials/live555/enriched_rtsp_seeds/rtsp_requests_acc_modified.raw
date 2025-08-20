@@ -1,0 +1,54 @@
+OPTIONS rtsp://127.0.0.1:8554/aacAudioTest RTSP/1.0
+CSeq: 1
+User-Agent: rtsp-tool/1.0
+
+DESCRIBE rtsp://127.0.0.1:8554/aacAudioTest RTSP/1.0
+CSeq: 2
+User-Agent: ./testRTSPClient (LIVE555 Streaming Media v2018.08.28)
+Accept: application/sdp
+
+SETUP rtsp://127.0.0.1:8554/aacAudioTest/track1 RTSP/1.0
+CSeq: 3
+User-Agent: ./testRTSPClient (LIVE555 Streaming Media v2018.08.28)
+Transport: RTP/AVP;unicast;client_port=38784-38785
+
+PLAY rtsp://127.0.0.1:8554/aacAudioTest/ RTSP/1.0
+CSeq: 4
+User-Agent: ./testRTSPClient (LIVE555 Streaming Media v2018.08.28)
+Session: 8888
+Range: npt=0.000-
+
+GET_PARAMETER rtsp://127.0.0.1:8554/aacAudioTest/ RTSP/1.0
+CSeq: 5
+User-Agent: rtsp-tool/1.0
+Session: 8888
+
+SET_PARAMETER rtsp://127.0.0.1:8554/aacAudioTest/ RTSP/1.0
+CSeq: 6
+User-Agent: rtsp-tool/1.0
+Session: 8888
+Content-Type: text/parameters
+Content-Length: 0
+
+PAUSE rtsp://127.0.0.1:8554/aacAudioTest/ RTSP/1.0
+CSeq: 7
+User-Agent: rtsp-tool/1.0
+Session: 8888
+
+TEARDOWN rtsp://127.0.0.1:8554/aacAudioTest/ RTSP/1.0
+CSeq: 8
+User-Agent: rtsp-tool/1.0
+Session: 8888
+
+ANNOUNCE rtsp://127.0.0.1:8554/aacAudioTest RTSP/1.0
+CSeq: 9
+User-Agent: rtsp-tool/1.0
+Session: 8888
+Content-Type: application/sdp
+Content-Length: 0
+
+RECORD rtsp://127.0.0.1:8554/aacAudioTest/ RTSP/1.0
+CSeq: 10
+User-Agent: rtsp-tool/1.0
+Session: 8888
+

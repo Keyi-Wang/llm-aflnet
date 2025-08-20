@@ -1,0 +1,60 @@
+OPTIONS rtsp://127.0.0.1:8554/ac3AudioTest RTSP/1.0
+CSeq: 1
+User-Agent: rtsp-tool/1.0
+
+DESCRIBE rtsp://127.0.0.1:8554/ac3AudioTest RTSP/1.0
+CSeq: 2
+User-Agent: ./testRTSPClient (LIVE555 Streaming Media v2018.08.28)
+Accept: application/sdp
+
+SETUP rtsp://127.0.0.1:8554/ac3AudioTest/track1 RTSP/1.0
+CSeq: 3
+User-Agent: ./testRTSPClient (LIVE555 Streaming Media v2018.08.28)
+Transport: RTP/AVP;unicast;client_port=33900-33901
+
+PLAY rtsp://127.0.0.1:8554/ac3AudioTest/ RTSP/1.0
+CSeq: 4
+User-Agent: ./testRTSPClient (LIVE555 Streaming Media v2018.08.28)
+Session: 000022B8
+Range: npt=0.000-
+
+GET_PARAMETER rtsp://127.0.0.1:8554/ac3AudioTest/ RTSP/1.0
+CSeq: 5
+User-Agent: rtsp-tool/1.0
+Session: 000022B8
+
+SET_PARAMETER rtsp://127.0.0.1:8554/ac3AudioTest/ RTSP/1.0
+CSeq: 6
+User-Agent: rtsp-tool/1.0
+Session: 000022B8
+Content-Type: text/parameters
+Content-Length: 0
+
+REDIRECT rtsp://127.0.0.1:8554/ac3AudioTest/ RTSP/1.0
+CSeq: 7
+User-Agent: rtsp-tool/1.0
+Session: 000022B8
+Location: rtsp://127.0.0.1:8554/ac3AudioTest/redirect
+
+PAUSE rtsp://127.0.0.1:8554/ac3AudioTest/ RTSP/1.0
+CSeq: 8
+User-Agent: rtsp-tool/1.0
+Session: 000022B8
+
+TEARDOWN rtsp://127.0.0.1:8554/ac3AudioTest/ RTSP/1.0
+CSeq: 9
+User-Agent: rtsp-tool/1.0
+Session: 000022B8
+
+ANNOUNCE rtsp://127.0.0.1:8554/ac3AudioTest RTSP/1.0
+CSeq: 10
+User-Agent: rtsp-tool/1.0
+Session: 000022B8
+Content-Type: application/sdp
+Content-Length: 0
+
+RECORD rtsp://127.0.0.1:8554/ac3AudioTest/ RTSP/1.0
+CSeq: 11
+User-Agent: rtsp-tool/1.0
+Session: 000022B8
+
