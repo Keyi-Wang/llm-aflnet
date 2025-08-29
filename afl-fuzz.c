@@ -81,6 +81,7 @@
 // MQTT packets definition
 #include "llm/mqtt/mqtt.h"
 #include "llm/ftp/ftp.h"
+#include "llm/smtp/smtp.h"
 
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined (__OpenBSD__)
 #  include <sys/sysctl.h>
@@ -446,6 +447,8 @@ void* generate_packets_by_protocol(const char* protocol_name, int count) {
         return (void*) generate_rtsp_packets(count);
     } else if (strcmp(protocol_name, "FTP") == 0) {
         return (void*) generate_ftp_packets(count);
+    } else if (strcmp(protocol_name, "SMTP") == 0) {
+        return (void*) generate_smtp_packets(count);
     }
     else {
         fprintf(stderr, "Unsupported protocol: %s\n", protocol_name);
@@ -7132,6 +7135,9 @@ else if(strcmp(protocol_name, "RTSP") == 0){
 else if(strcmp(protocol_name, "FTP") == 0){
   pkt_num = parse_ftp_msg(out_buf, len, (ftp_packet_t*)packets, 105);
 }
+else if(strcmp(protocol_name, "SMTP") == 0){
+  pkt_num = parse_smtp_msg(out_buf, len, (smtp_packet_t*)packets, 105);
+}
 else{
   printf("不支持的协议: %s\n", protocol_name);
   goto real_havoc_stage;
@@ -7182,6 +7188,9 @@ for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
   else if(strcmp(protocol_name, "FTP") == 0){
      dispatch_ftp_multiple_mutations(packets, pkt_num, rounds);
   }
+  else if(strcmp(protocol_name, "SMTP") == 0){
+    dispatch_smtp_multiple_mutations(packets, pkt_num, rounds);
+  }
  
 
   // // Step 4: Fix the M2' according to thr LLM-generated fixer. Return fixed structured messages(M2'').
@@ -7193,6 +7202,9 @@ for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
   }
   else if(strcmp(protocol_name, "FTP") == 0){
     fix_ftp(packets, pkt_num);
+  }
+  else if(strcmp(protocol_name, "SMTP") == 0){
+    fix_smtp(packets, pkt_num);
   }
   
 
@@ -7216,7 +7228,14 @@ for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
   }
   else if(strcmp(protocol_name, "FTP") == 0){
     if (reassemble_ftp_msgs(packets, pkt_num, output_buf, &out_len) != 0) {
-       printf("FTP_重组失败,跳过\n");
+      printf("FTP_重组失败,跳过\n");
+      continue;
+       
+    }
+  }
+  else if(strcmp(protocol_name, "SMTP") == 0){
+    if (reassemble_smtp_msgs(packets, pkt_num, output_buf, &out_len) != 0) {
+      printf("SMTP_重组失败,跳过\n");
       continue;
        
     }
