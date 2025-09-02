@@ -60,6 +60,13 @@ smtp_SRC = llm/smtp/smtp_init.c \
               llm/smtp/smtp_reassembler.c
 smtp_OBJ = $(smtp_SRC:.c=.o)
 
+sip_SRC = llm/sip/sip_init.c \
+              llm/sip/sip_parser.c \
+              llm/sip/sip_mutators.c \
+              llm/sip/sip_fixers.c \
+              llm/sip/sip_reassembler.c
+sip_OBJ = $(sip_SRC:.c=.o)
+
 ifneq "$(filter Linux GNU%,$(shell uname))" ""
   LDFLAGS  += -ldl -lgvc -lcgraph -lm -lcap
 endif
@@ -97,8 +104,8 @@ afl-as: afl-as.c afl-as.h $(COMM_HDR) | test_x86
 	$(CC) $(CFLAGS) $@.c -o $@ $(LDFLAGS)
 	ln -sf afl-as as
 
-afl-fuzz: afl-fuzz.c $(COMM_HDR) aflnet.o aflnet.h $(MQTT_OBJ) $(RTSP_OBJ) $(ftp_OBJ) $(smtp_OBJ) | test_x86  
-	$(CC) $(CFLAGS) $@.c aflnet.o $(MQTT_OBJ) $(RTSP_OBJ) $(ftp_OBJ) $(smtp_OBJ) -o $@ $(LDFLAGS)  
+afl-fuzz: afl-fuzz.c $(COMM_HDR) aflnet.o aflnet.h $(MQTT_OBJ) $(RTSP_OBJ) $(ftp_OBJ) $(smtp_OBJ) $(sip_OBJ) | test_x86  
+	$(CC) $(CFLAGS) $@.c aflnet.o $(MQTT_OBJ) $(RTSP_OBJ) $(ftp_OBJ) $(smtp_OBJ) $(sip_OBJ) -o $@ $(LDFLAGS)  
 
 afl-replay: afl-replay.c $(COMM_HDR) aflnet.o aflnet.h | test_x86
 	$(CC) $(CFLAGS) $@.c aflnet.o -o $@ $(LDFLAGS)
@@ -186,8 +193,5 @@ publish: clean
 	cat docs/ChangeLog >~/www/afl/ChangeLog.txt
 	cat docs/QuickStartGuide.txt >~/www/afl/QuickStartGuide.txt
 	echo -n "$(VERSION)" >~/www/afl/version.txt
-
-
-
 
 

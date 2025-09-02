@@ -82,6 +82,7 @@
 #include "llm/mqtt/mqtt.h"
 #include "llm/ftp/ftp.h"
 #include "llm/smtp/smtp.h"
+#include "llm/sip/sip.h"
 
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined (__OpenBSD__)
 #  include <sys/sysctl.h>
@@ -449,6 +450,8 @@ void* generate_packets_by_protocol(const char* protocol_name, int count) {
         return (void*) generate_ftp_packets(count);
     } else if (strcmp(protocol_name, "SMTP") == 0) {
         return (void*) generate_smtp_packets(count);
+    } else if (strcmp(protocol_name, "SIP") == 0) {
+        return (void*) generate_sip_packets(count);
     }
     else {
         fprintf(stderr, "Unsupported protocol: %s\n", protocol_name);
@@ -7138,6 +7141,9 @@ else if(strcmp(protocol_name, "FTP") == 0){
 else if(strcmp(protocol_name, "SMTP") == 0){
   pkt_num = parse_smtp_msg(out_buf, len, (smtp_packet_t*)packets, 105);
 }
+else if(strcmp(protocol_name, "SIP") == 0){
+  pkt_num = parse_sip_msg(out_buf, len, (sip_packet_t*)packets, 105);
+}
 else{
   printf("不支持的协议: %s\n", protocol_name);
   goto real_havoc_stage;
@@ -7191,7 +7197,9 @@ for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
   else if(strcmp(protocol_name, "SMTP") == 0){
     dispatch_smtp_multiple_mutations(packets, pkt_num, rounds);
   }
- 
+  else if(strcmp(protocol_name, "SIP") == 0){
+    dispatch_sip_multiple_mutations(packets, pkt_num, rounds);
+  }
 
   // // Step 4: Fix the M2' according to thr LLM-generated fixer. Return fixed structured messages(M2'').
   if(strcmp(protocol_name, "MQTT") == 0) {
@@ -7205,6 +7213,9 @@ for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
   }
   else if(strcmp(protocol_name, "SMTP") == 0){
     fix_smtp(packets, pkt_num);
+  }
+  else if(strcmp(protocol_name, "SIP") == 0){
+    fix_sip(packets, pkt_num);
   }
   
 
@@ -7240,7 +7251,13 @@ for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
        
     }
   }
-
+  else if(strcmp(protocol_name, "SIP") == 0){
+    if (reassemble_sip_msgs(packets, pkt_num, output_buf, &out_len) != 0) {
+      printf("SIP_重组失败,跳过\n");
+      continue;
+       
+    }
+  }
   // printf("pkt_num: %zu\n", pkt_num);
   // printf("reassemble output_buf: %s\n", output_buf);
   if(out_len > MAX_FILE || out_len < 1) {
