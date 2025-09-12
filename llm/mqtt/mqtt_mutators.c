@@ -236,32 +236,21 @@ void mutate_connect_properties(mqtt_connect_packet_t *packets, int num_packets) 
 
         for (int j = 0; j < num_props && pos < MAX_PROPERTIES_LEN - 5; ++j) {
             uint8_t id;
-            if (rand() % 2) {
-                id = legal_ids[rand() % legal_id_count]; // 从合法表挑
-            } else {
-                id = (uint8_t)(rand() & 0xFF); // 随机非法
-            }
+
+            id = legal_ids[rand() % legal_id_count]; // 从合法表挑
+
 
             pkt->variable_header.properties[pos++] = id;
 
             // 随机值长度：1, 2 或 4
             int val_len = 1 << (rand() % 3);
 
-            // 边界：有时声明长度与实际值不符
-            if (rand() % 10 == 0) val_len += rand() % 2;
 
             for (int k = 0; k < val_len && pos < MAX_PROPERTIES_LEN; ++k) {
                 pkt->variable_header.properties[pos++] = (uint8_t)(rand() & 0xFF);
             }
         }
-
-        // 最终声明长度可以错配或准确
-        if (rand() % 5 == 0 && pos + 5 < MAX_PROPERTIES_LEN) {
-            // 声明大于实际填充
-            pkt->variable_header.property_len = pos + rand() % 5;
-        } else {
-            pkt->variable_header.property_len = pos;
-        }
+        pkt->variable_header.property_len = num_props;
     }
 }
 

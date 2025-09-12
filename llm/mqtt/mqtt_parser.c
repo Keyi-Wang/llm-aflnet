@@ -308,7 +308,10 @@ void print_mqtt_packets(const mqtt_packet_t *pkt, size_t count) {
                 printf("  Connect Flags : 0x%02X\n", pkt->connect.variable_header.connect_flags);
                 printf("  Keep Alive    : %u\n", pkt->connect.variable_header.keep_alive);
                 printf("  Property Len  : %u\n", pkt->connect.variable_header.property_len);
-
+                printf("  Properties    : ");
+                for (size_t i = 0; i < pkt->connect.variable_header.property_len; ++i) {
+                    printf("%02X ", pkt->connect.variable_header.properties[i]);
+                }
                 printf("  Client ID     : %s\n", pkt->connect.payload.client_id);
                 // 如有需要，可继续打印 will、username、password 等
                 break;

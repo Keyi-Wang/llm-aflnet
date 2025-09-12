@@ -48,8 +48,10 @@ int reassemble_a_mqtt_msg(const mqtt_packet_t *pkt, u8 *output_buf, u32 *out_len
             write_uint16(payload_buf + payload_len, con->variable_header.keep_alive);
             payload_len += 2;
 
-            if (con->variable_header.properties) {
-                u32 len = strlen((char *)con->variable_header.properties);
+            if (con->variable_header.property_len > 0 && con->variable_header.properties) {
+                // u32 len = strlen((char *)con->variable_header.properties);
+                u32 len = con->variable_header.property_len;
+                // printf("(reassemble)Properties length: %u\n", len);
                 payload_len += write_remaining_length(payload_buf + payload_len, len);
                 memcpy(payload_buf + payload_len, con->variable_header.properties, len);
                 payload_len += len;
@@ -60,17 +62,18 @@ int reassemble_a_mqtt_msg(const mqtt_packet_t *pkt, u8 *output_buf, u32 *out_len
             if (con->payload.client_id)
                 payload_len += write_utf8_str(payload_buf + payload_len, con->payload.client_id);
 
-            if (con->payload.will_properties) {
+            if (con->payload.will_properties[0]) {
+                // printf("(reassemble)Will Properties: %s\n", con->payload.will_properties);
                 u32 len = strlen((char *)con->payload.will_properties);
                 payload_len += write_remaining_length(payload_buf + payload_len, len);
                 memcpy(payload_buf + payload_len, con->payload.will_properties, len);
                 payload_len += len;
             }
 
-            if (con->payload.will_topic)
+            if (con->payload.will_topic[0])
                 payload_len += write_utf8_str(payload_buf + payload_len, con->payload.will_topic);
 
-            if (con->payload.will_payload) {
+            if (con->payload.will_payload[0]) {
                 u32 len = strlen((char *)con->payload.will_payload);
                 write_uint16(payload_buf + payload_len, len);
                 payload_len += 2;
@@ -78,10 +81,10 @@ int reassemble_a_mqtt_msg(const mqtt_packet_t *pkt, u8 *output_buf, u32 *out_len
                 payload_len += len;
             }
 
-            if (con->payload.user_name)
+            if (con->payload.user_name[0])
                 payload_len += write_utf8_str(payload_buf + payload_len, con->payload.user_name);
 
-            if (con->payload.password) {
+            if (con->payload.password[0]) {
                 u32 len = strlen((char *)con->payload.password);
                 write_uint16(payload_buf + payload_len, len);
                 payload_len += 2;

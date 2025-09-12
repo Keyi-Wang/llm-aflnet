@@ -7,47 +7,66 @@ void fix_connect_packet_will_rules(mqtt_connect_packet_t *packets, int num_packe
     for (int i = 0; i < num_packets; ++i) {
         mqtt_connect_packet_t *pkt = &packets[i];
 
-        // 提取 Will Flag, Will QoS, Will Retain（来自 connect_flags）
-        uint8_t connect_flags = pkt->variable_header.connect_flags;
-        uint8_t will_flag   = (connect_flags >> 2) & 0x01;
-        uint8_t will_qos    = (connect_flags >> 3) & 0x03;
-        uint8_t will_retain = (connect_flags >> 5) & 0x01;
+        /* 0) 清保留位 bit0（必须为 0） */
+        pkt->variable_header.connect_flags &= ~0x01;
 
-        // [MQTT-3.1.2-11] If Will Flag == 0, Will QoS must be 0
-        // [MQTT-3.1.2-13] If Will Flag == 0, Will Retain must be 0
+        uint8_t flags       = pkt->variable_header.connect_flags;
+        uint8_t will_flag   = (flags >> 2) & 0x01;
+        uint8_t will_qos    = (flags >> 3) & 0x03;
+        uint8_t will_retain = (flags >> 5) & 0x01;
+
+        /* 如果是 MQTT v3.1.1 及以下，根本没有 Will Properties（仅 v5 有） */
+        if (pkt->variable_header.protocol_level < 5) {
+            pkt->payload.will_property_len = 0;
+        }
+
         if (will_flag == 0) {
-            pkt->variable_header.connect_flags &= ~(0x03 << 3); // clear Will QoS (bit 3-4)
-            pkt->variable_header.connect_flags &= ~(1 << 5);    // clear Will Retain (bit 5)
+            /* 1) Will=0 则 QoS=0、Retain=0，且禁止携带任何 Will 字段 */
+            pkt->variable_header.connect_flags &= ~(0x03 << 3); /* QoS -> 0 */
+            pkt->variable_header.connect_flags &= ~(1 << 5);    /* Retain -> 0 */
+
+            pkt->payload.will_property_len = 0;
+            pkt->payload.will_payload_len  = 0;
+            if (sizeof(pkt->payload.will_topic) > 0)
+                pkt->payload.will_topic[0] = '\0';
+
         } else {
-            // [MQTT-3.1.2-12] If Will Flag == 1, Will QoS must ∈ {0,1,2}
+            /* 2) Will=1 时 QoS ∈ {0,1,2} */
             if (will_qos > 2) {
-                pkt->variable_header.connect_flags &= ~(0x03 << 3); // clear Will QoS
-                pkt->variable_header.connect_flags |= (0x00 << 3);  // set Will QoS to 0
+                pkt->variable_header.connect_flags &= ~(0x03 << 3);
+                pkt->variable_header.connect_flags |=  (0x00 << 3); /* QoS=0 */
             }
 
-            // [MQTT-3.1.2-9] If Will Flag == 1, Will fields must be present
+            /* 3) 必须有 topic 和 payload（至少非空） */
             if (pkt->payload.will_topic[0] == '\0') {
-                strncpy(pkt->payload.will_topic, "default/topic", MAX_TOPIC_LEN);
+                /* 确保留出 \0 结尾 */
+                snprintf(pkt->payload.will_topic, MAX_TOPIC_LEN, "%s", "default/topic");
             }
-
             if (pkt->payload.will_payload_len == 0) {
-                const char *default_payload = "default_payload";
-                size_t len = strlen(default_payload);
-                memcpy(pkt->payload.will_payload, default_payload, len);
-                pkt->payload.will_payload_len = len;
+                const char *def = "default_payload";
+                size_t len = strlen(def);
+                if (len > MAX_CLIENT_ID_LEN) len = MAX_CLIENT_ID_LEN;
+                memcpy(pkt->payload.will_payload, def, len);
+                pkt->payload.will_payload_len = (uint16_t)len;
             }
 
-            if (pkt->payload.will_property_len == 0) {
-                // 添加一个默认 Will Property（例如会话过期时间 ID: 0x18）
-                pkt->payload.will_properties[0] = 0x18;
-                pkt->payload.will_properties[1] = 0x00;
-                pkt->payload.will_property_len = 2;
+            /* 4) v5 的 Will Properties 必须是合法编码 */
+            if (pkt->variable_header.protocol_level >= 5) {
+                if (pkt->payload.will_property_len == 0) {
+                    /* 选一个最短且合法的属性：Payload Format Indicator (0x01) + 1字节值 */
+                    pkt->payload.will_properties[0] = 0x01;  /* PFI */
+                    pkt->payload.will_properties[1] = 0x00;  /* value=0 (unspecified) */
+                    pkt->payload.will_property_len  = 2;
+
+                }
+            } else {
+                pkt->payload.will_property_len = 0;
             }
         }
 
-        // （注意：3.1.2-14 和 15 是对 Server 行为的要求，不需要在 Client 端修复）
     }
 }
+
 
 
 void fix_user_name_flag(mqtt_connect_packet_t *packets, int num_packets) {
@@ -62,6 +81,9 @@ void fix_user_name_flag(mqtt_connect_packet_t *packets, int num_packets) {
         if (user_name_flag == 0) {
             // [MQTT-3.1.2-16] User Name must NOT be present
             memset(pkt->payload.user_name, 0, MAX_CLIENT_ID_LEN);
+            pkt->payload.password_len = 0;
+            pkt->variable_header.connect_flags &= ~(1 << 6); // Clear Password Flag
+            memset(pkt->payload.password, 0, MAX_CLIENT_ID_LEN);
         } else {
             // [MQTT-3.1.2-17] User Name must be present
             if (pkt->payload.user_name[0] == '\0') {
@@ -104,8 +126,8 @@ void fix_connect_all_length(mqtt_connect_packet_t *packets, int num_packets) {
     for (int i = 0; i < num_packets; ++i) {
         mqtt_connect_packet_t *pkt = &packets[i];
 
-        // 修复 variable header 的 property_len（属性实际长度）
-        pkt->variable_header.property_len = strlen((char *)pkt->variable_header.properties);
+        // // 修复 variable header 的 property_len（属性实际长度）
+        // pkt->variable_header.property_len = strlen((char *)pkt->variable_header.properties);
 
         // 修复 will_property_len
         pkt->payload.will_property_len = strlen((char *)pkt->payload.will_properties);
