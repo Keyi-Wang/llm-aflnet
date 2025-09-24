@@ -243,7 +243,7 @@ size_t parse_mqtt_msg(const uint8_t *buf, size_t buf_len, mqtt_packet_t *out_pac
   // printf("Parsing MQTT messages from buffer of length %zu\n", buf_len);
     size_t offset = 0;
     size_t count = 0;
-    printf("pointer address(parser): %p\n", (void*)out_packets);
+    // printf("pointer address(parser): %p\n", (void*)out_packets);
     while (offset < buf_len && count < max_count) {
         uint8_t packet_type = buf[offset] >> 4;
         // printf("Parsing packet type: 0x%02X at offset %zu\n", packet_type, offset);

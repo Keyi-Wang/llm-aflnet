@@ -8,6 +8,16 @@
 #define CLEAN_START     0x02
 #define RESERVED        0x01
 
+static int pick_weighted(const int *w, int n) {
+    int sum = 0;
+    for (int i = 0; i < n; ++i) sum += w[i];
+    int r = rand() % sum;
+    for (int i = 0; i < n; ++i) {
+        if (r < w[i]) return i;
+        r -= w[i];
+    }
+    return n - 1;
+}
 
 void mutate_connect_flags(mqtt_connect_packet_t* pkts, int num_pkts) {
     int total_mutations = 0;
@@ -16,7 +26,8 @@ void mutate_connect_flags(mqtt_connect_packet_t* pkts, int num_pkts) {
         uint8_t original = pkts[i].variable_header.connect_flags;
         uint8_t mutated = original;
 
-        int mut_type = rand() % 7;
+        int weights[7] = {70, 5, 5, 5, 5, 5, 5}; 
+        int mut_type = pick_weighted(weights, 7);
 
         switch (mut_type) {
             case 0:  // 合法组合：随机合法构造
@@ -75,7 +86,8 @@ void mutate_connect_keep_alive(mqtt_connect_packet_t* pkts, int num_pkts) {
         uint16_t orig = pkts[i].variable_header.keep_alive;
         uint16_t mutated = orig;
 
-        int strategy = rand() % 7;
+        int weights[7] = {20, 20, 20, 20, 5, 5, 10}; 
+        int strategy = pick_weighted(weights, 7);
 
         switch (strategy) {
             case 0:
@@ -277,7 +289,8 @@ void mutate_connect_client_id(mqtt_connect_packet_t *packets, int num_packets) {
     for (int i = 0; i < num_packets; ++i) {
         char *cid = packets[i].payload.client_id;
         int orig_len = strlen(cid);
-        int mut_type = rand() % 8;
+        int weights[8] = {5, 70, 5, 5, 5, 5, 5, 5}; 
+        int mut_type = pick_weighted(weights, 8);
 
         switch (mut_type) {
             case 0: // 空 ID
@@ -461,7 +474,8 @@ void mutate_connect_will_properties(mqtt_connect_packet_t *packets, int num_pack
         mqtt_connect_packet_t *pkt = &packets[i];
         uint8_t *props = pkt->payload.will_properties;
 
-        int strategy = rand() % 8;
+        int weights[8] = {40, 40, 5, 5, 5, 5, 5, 5}; 
+        int strategy = pick_weighted(weights, 8);
 
         switch (strategy) {
 
@@ -602,7 +616,8 @@ void mutate_connect_will_topic(mqtt_connect_packet_t *packets, int num_packets) 
 
         if (!(packets[i].variable_header.connect_flags & 0x04)) continue;  // WillFlag=1
 
-        int strategy = rand() % 6;
+        int weights[6] = {30, 50, 5, 5, 5, 5}; 
+        int strategy = pick_weighted(weights, 6);
         char *topic = packets[i].payload.will_topic;
 
         switch (strategy) {
@@ -715,7 +730,8 @@ void mutate_connect_will_payload(mqtt_connect_packet_t *packets, int num_packets
 
         if (!(packets[i].variable_header.connect_flags & 0x04)) continue; // 仅在 WillFlag=1 时生效
 
-        uint8_t strategy = rand() % 7;
+        int weights[7] = {70, 5, 5, 5, 5, 5, 5}; 
+        int strategy = pick_weighted(weights, 7);
         uint8_t *payload = packets[i].payload.will_payload;
         uint16_t *len = &packets[i].payload.will_payload_len;
 
@@ -877,7 +893,8 @@ void mutate_connect_user_name(mqtt_connect_packet_t *packets, int num_packets) {
         // 如果未启用 User Name Flag，则跳过
         if (!(pkt->variable_header.connect_flags & 0x80)) continue;
 
-        int strategy = rand() % 7;
+        int weights[7] = {70, 10, 5, 5, 5, 5, 5}; 
+        int strategy = pick_weighted(weights, 7);
 
         switch (strategy) {
 
@@ -983,7 +1000,8 @@ void mutate_connect_password(mqtt_connect_packet_t *packets, int num_packets) {
         // 若未启用 Password Flag，则跳过
         if (!(pkt->variable_header.connect_flags & 0x40)) continue;
 
-        int strategy = rand() % 8;
+        int weights[8] = {70, 5, 5, 5, 5, 5, 5, 5}; 
+        int strategy = pick_weighted(weights, 8);
 
         switch (strategy) {
 
@@ -1114,8 +1132,9 @@ void mutate_subscribe_packet_identifier(mqtt_subscribe_packet_t *subs, size_t nu
         mqtt_subscribe_packet_t *pkt = &subs[i];
         uint16_t original = pkt->variable_header.packet_identifier;
         uint16_t mutated = original;
-
-        switch (rand() % 10) {
+        int weights[10] = {5, 40, 40, 10, 10, 10, 40, 40, 40, 40}; 
+        int strategy = pick_weighted(weights, 10);
+        switch (strategy) {
             case 0: // 设置为0（非法，MQTT规定Packet ID不能为0）
                 mutated = 0;
                 break;
@@ -1160,8 +1179,9 @@ void mutate_subscribe_properties(mqtt_subscribe_packet_t *subs, size_t num_subs)
         uint32_t *plen = &pkt->variable_header.property_len;
 
         if (*plen > MAX_PROPERTIES_LEN) continue;
-
-        switch (rand() % 10) {
+        int weights[10] = {40, 10, 5, 10, 10, 10, 5, 5, 10, 5}; 
+        int strategy = pick_weighted(weights, 10);
+        switch (strategy) {
             case 0: // 清空属性
                 *plen = 0;
                 break;
@@ -1271,8 +1291,9 @@ void mutate_subscribe_topic_filter(mqtt_subscribe_packet_t *subs, size_t num_sub
 
         for (int j = 0; j < pkt->payload.topic_count; ++j) {
             char *filter = pkt->payload.topic_filters[j].topic_filter;
-
-            switch (rand() % 10) {
+            int weights[10] = {40, 5, 5, 10, 10, 40, 10, 40, 5, 40}; 
+            int strategy = pick_weighted(weights, 10);
+            switch (strategy) {
                 case 0: // 替换为通配符
                     strncpy(filter, wildcards[rand() % 5], MAX_TOPIC_LEN);
                     break;
@@ -1344,7 +1365,9 @@ void mutate_subscribe_qos(mqtt_subscribe_packet_t *subs, size_t num_subs) {
         mqtt_subscribe_packet_t *pkt = &subs[i];
         for (int j = 0; j < pkt->payload.topic_count; ++j) {
             uint8_t *qos = &pkt->payload.topic_filters[j].qos;
-            switch (rand() % 10) {
+            int weights[10] = {40, 40, 40, 5, 5, 10, 5, 10, 10, 40}; 
+            int strategy = pick_weighted(weights, 10);
+            switch (strategy) {
                 case 0: // 设置为合法值0
                     *qos = 0;
                     break;
@@ -1384,8 +1407,9 @@ void mutate_subscribe_topic_count(mqtt_subscribe_packet_t *subs, size_t num_subs
     for (size_t i = 0; i < num_subs; ++i) {
         mqtt_subscribe_packet_t *pkt = &subs[i];
         uint8_t *count = &pkt->payload.topic_count;
-
-        switch (rand() % 10) {
+        int weights[10] = {5, 40, 5, 40, 40, 5, 10, 10, 10, 10}; 
+        int strategy = pick_weighted(weights, 10);
+        switch (strategy) {
             case 0: // 设置为 0（非法，必须至少有一个 topic）
                 *count = 0;
                 break;
@@ -1449,8 +1473,9 @@ void delete_publish_topic_name(mqtt_publish_packet_t *pkts, size_t num) {
 void mutate_publish_topic_name(mqtt_publish_packet_t *pkts, size_t num) {
     for (size_t i = 0; i < num; ++i) {
         char *topic = pkts[i].variable_header.topic_name;
-
-        switch (rand() % 10) {
+        int weights[10] = {5, 40, 40, 5, 5, 40, 10, 40, 10, 40}; 
+        int strategy = pick_weighted(weights, 10);
+        switch (strategy) {
             case 0:  // 设置为空串（非法，除非使用 Topic Alias）
                 topic[0] = '\0';
                 break;
@@ -1513,8 +1538,9 @@ void mutate_publish_packet_identifier(mqtt_publish_packet_t *pkts, size_t num) {
 
         // 若 QoS == 0，该字段无意义；我们故意做边界测试
         uint16_t *id = &pkt->variable_header.packet_identifier;
-
-        switch (rand() % 10) {
+        int weights[10] = {5, 40, 40, 40, 10, 40, 40, 10, 10, 10}; 
+        int strategy = pick_weighted(weights, 10);
+        switch (strategy) {
             case 0: *id = 0; break;                     // 非法值（当 QoS > 0）
             case 1: *id = 1; break;                     // 最小有效值
             case 2: *id = 0xFFFF; break;                // 最大值
@@ -1569,8 +1595,9 @@ void mutate_publish_properties(mqtt_publish_packet_t *pkts, size_t num) {
         mqtt_publish_packet_t *pkt = &pkts[i];
         uint8_t *props = pkt->variable_header.properties;
         uint32_t *len = &pkt->variable_header.property_len;
-
-        switch (rand() % 10) {
+        int weights[10] = {40, 5, 40, 40, 5, 5, 5, 5, 40, 40}; 
+        int strategy = pick_weighted(weights, 10);
+        switch (strategy) {
             case 0: // 清空
                 *len = 0;
                 break;
@@ -1648,8 +1675,9 @@ void mutate_publish_payload(mqtt_publish_packet_t *pkts, size_t num) {
         mqtt_publish_packet_t *pkt = &pkts[i];
         uint8_t *p = pkt->payload.payload;
         uint32_t *len = &pkt->payload.payload_len;
-
-        switch (rand() % 10) {
+        int weights[10] = {40, 40, 10, 10, 5, 10, 5, 5, 40, 40}; 
+        int strategy = pick_weighted(weights, 10);
+        switch (strategy) {
             case 0: // 清空
                 *len = 0;
                 break;
@@ -1696,8 +1724,9 @@ void mutate_publish_qos(mqtt_publish_packet_t *pkts, size_t num) {
     for (size_t i = 0; i < num; ++i) {
         mqtt_publish_packet_t *pkt = &pkts[i];
         uint8_t *qos = &pkt->qos;
-
-        switch (rand() % 10) {
+        int weights[10] = {40, 40, 40, 5, 5, 10, 10, 10, 10, 5}; 
+        int strategy = pick_weighted(weights, 10);
+        switch (strategy) {
             case 0: *qos = 0; break;               // 合法值
             case 1: *qos = 1; break;               // 合法值
             case 2: *qos = 2; break;               // 合法值
@@ -1717,8 +1746,9 @@ void mutate_publish_dup(mqtt_publish_packet_t *pkts, size_t num) {
     for (size_t i = 0; i < num; ++i) {
         mqtt_publish_packet_t *pkt = &pkts[i];
         uint8_t *dup = &pkt->dup;
-
-        switch (rand() % 10) {
+        int weights[10] = {40, 40, 40, 10, 5, 5, 10, 10, 5, 10}; 
+        int strategy = pick_weighted(weights, 10);
+        switch (strategy) {
             case 0: *dup = 0; break;                 // 合法值: 0 = 非重复
             case 1: *dup = 1; break;                 // 合法值: 1 = 重复消息
             case 2: *dup = (*dup == 0) ? 1 : 0; break; // 切换原始值
@@ -1737,8 +1767,9 @@ void mutate_publish_retain(mqtt_publish_packet_t *pkts, size_t num) {
     for (size_t i = 0; i < num; ++i) {
         mqtt_publish_packet_t *pkt = &pkts[i];
         uint8_t *retain = &pkt->retain;
-
-        switch (rand() % 10) {
+        int weights[10] = {40, 40, 10, 5, 5, 10, 5, 5, 10, 10}; 
+        int strategy = pick_weighted(weights, 10);
+        switch (strategy) {
             case 0: *retain = 0; break;                 // 合法值：清除 retain
             case 1: *retain = 1; break;                 // 合法值：设置 retain
             case 2: *retain ^= 0x01; break;             // 位翻转
@@ -1759,8 +1790,9 @@ void mutate_unsubscribe_packet_identifier(mqtt_unsubscribe_packet_t *pkts, int n
     for (int i = 0; i < num; ++i) {
         mqtt_unsubscribe_packet_t *pkt = &pkts[i];
         uint16_t *id = &pkt->variable_header.packet_identifier;
-
-        switch (rand() % NUM_MUTATIONS) {
+        int weights[10] = {40, 40, 5, 10, 10, 40, 40, 40, 5, 5}; 
+        int strategy = pick_weighted(weights, 10);
+        switch (strategy) {
             case 0: *id = 0x0001; break;                          // 最小合法值
             case 1: *id = 0xFFFF; break;                          // 最大合法值
             case 2: *id = 0x0000; break;                          // 非法值（规范要求不能为 0）
@@ -1822,8 +1854,9 @@ void mutate_unsubscribe_properties(mqtt_unsubscribe_packet_t *pkts, int num) {
         mqtt_unsubscribe_packet_t *pkt = &pkts[i];
         uint8_t *props = pkt->variable_header.properties;
         uint32_t *len = &pkt->variable_header.property_len;
-
-        switch (rand() % 10) {
+        int weights[10] = {40, 10, 10, 10, 5, 5, 40, 5, 10, 5}; 
+        int strategy = pick_weighted(weights, 10);
+        switch (strategy) {
             case 0:  // 清空属性
                 *len = 0;
                 memset(props, 0, MAX_PROPERTIES_LEN);
@@ -1885,9 +1918,9 @@ void mutate_unsubscribe_topic_filters(mqtt_unsubscribe_packet_t *pkts, int num) 
     for (int i = 0; i < num; ++i) {
         mqtt_unsubscribe_packet_t *pkt = &pkts[i];
         uint8_t count = pkt->payload.topic_count;
-
-        int op = rand() % 10;
-        switch (op) {
+        int weights[10] = {5, 5, 5, 5, 40, 10, 5, 5, 5, 5}; 
+        int strategy = pick_weighted(weights, 10);
+        switch (strategy) {
             case 0:  // 清空所有 topic filter（非法）
                 pkt->payload.topic_count = 0;
                 break;
@@ -1978,9 +2011,9 @@ void mutate_auth_reason_code(mqtt_auth_packet_t *pkts, int num) {
         if (pkt->fixed_header.remaining_length < 1) continue;
 
         uint8_t *rc = &pkt->variable_header.reason_code;
-        uint8_t mutation_type = rand() % 10;
-
-        switch (mutation_type) {
+        int weights[10] = {40, 40, 40, 5, 10, 5, 10, 10, 40, 10}; 
+        int strategy = pick_weighted(weights, 10);
+        switch (strategy) {
             case 0: *rc = 0x00; break;                  // 合法值：Success
             case 1: *rc = 0x18; break;                  // 合法值：Continue authentication
             case 2: *rc = 0x19; break;                  // 合法值：Re-authenticate
@@ -2033,9 +2066,9 @@ void mutate_auth_properties(mqtt_auth_packet_t *pkts, int num) {
         mqtt_auth_packet_t *pkt = &pkts[i];
         uint32_t *len = &pkt->variable_header.property_len;
         uint8_t *p = pkt->variable_header.properties;
-
-        uint8_t choice = rand() % 10;
-        switch (choice) {
+        int weights[10] = {10, 40, 5, 5, 10, 40, 40, 5, 5, 5}; 
+        int strategy = pick_weighted(weights, 10);
+        switch (strategy) {
             case 0: // 插入 Authentication Method 空字符串
                 p[0] = 0x15; p[1] = 0x00; p[2] = 0x00; *len = 3; break;
             case 1: // 插入 Authentication Method "PLAIN"
