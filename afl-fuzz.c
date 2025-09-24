@@ -439,8 +439,13 @@ u32 pkt_num = 0; // packet num
 void *packets; // packet 指针
 const char* protocol_name = NULL;  // 初始化为 NULL
 u32 semantic_queue = 0;
-
-
+long total_msg_send = 0; 
+long region_mutate_cnt = 0;
+long region_total_cnt = 0;
+long M2_total_cnt = 0;
+double region_mutate_ratio = 0.0;
+double M2_ratio = 0.0;
+u32 region_cnt = 0;
 void* generate_packets_by_protocol(const char* protocol_name, int count) {
     if (strcmp(protocol_name, "MQTT") == 0) {
         return (void*) generate_mqtt_packets(count);
@@ -635,13 +640,14 @@ void update_fuzzs() {
         kh_val(khms_states, k)->fuzzs++;
       }
     }
-  }
-  if(i>=M2_start_region_ID && i<=M2_start_region_ID + M2_region_count) {
-    if(state_sequence[i]==32||state_sequence[i]==64||state_sequence[i]==80||state_sequence[i]==98||state_sequence[i]==112||state_sequence[i]==144||state_sequence[i]==176||state_sequence[i]==208||state_sequence[i]==224||state_sequence[i]==240) {
-      fix_success_rsp++;
+    if(strcmp(stage_short,"sem")==0 &&i>M2_start_region_ID && i<=M2_start_region_ID + M2_region_count) {
+      if(state_sequence[i]==32||state_sequence[i]==64||state_sequence[i]==80||state_sequence[i]==98||state_sequence[i]==112||state_sequence[i]==144||state_sequence[i]==176||state_sequence[i]==208||state_sequence[i]==224||state_sequence[i]==240) {
+        fix_success_rsp++;
+      }
+      fix_send_req++;
     }
-    fix_send_req++;
   }
+
   ck_free(state_sequence);
   kh_destroy(hs32, khs_state_ids);
 }
@@ -1124,7 +1130,9 @@ int send_over_network()
   for (it = kl_begin(kl_messages); it != kl_end(kl_messages); it = kl_next(it)) {
     n = net_send(sockfd, timeout, kl_val(it)->mdata, kl_val(it)->msize);
     messages_sent++;
-
+    if(strcmp(stage_short,"dry")){
+      total_msg_send++;
+    }
     //Allocate memory to store new accumulated response buffer size
     response_bytes = (u32 *) ck_realloc(response_bytes, messages_sent * sizeof(u32));
 
@@ -3679,7 +3687,7 @@ static void perform_dry_run(char** argv) {
   struct queue_entry* q = queue;
   u32 cal_failures = 0;
   u8* skip_crashes = getenv("AFL_SKIP_CRASHES");
-
+  stage_short = "dry";
   while (q) {
 
     u8* use_mem;
@@ -3724,7 +3732,25 @@ static void perform_dry_run(char** argv) {
     if (res == crash_mode || res == FAULT_NOBITS)
       SAYF(cGRA "    len = %u, map size = %u, exec speed = %llu us\n" cRST,
            q->len, q->bitmap_size, q->exec_us);
+      // add code here: save q-> f_name, q-> bitmap_size to file
+      static int bm_fd = -1;
+      if (bm_fd < 0) {
+        const char *p = getenv("AFL_BITMAP_LOG");
+        if (!p || !*p) p = "/home/ubuntu/bitmap_log.csv";
+        bm_fd = open(p, O_CREAT | O_WRONLY | O_APPEND, 0644);
+        if (bm_fd >= 0) {
+          struct stat st;
+          if (fstat(bm_fd, &st) == 0 && st.st_size == 0) {
+            dprintf(bm_fd, "fname,bitmap_size\n");  // 首次写入表头
+          }
+        }
+      }
 
+      if (bm_fd >= 0) {
+        dprintf(bm_fd, "%s,%u\n",
+                basename(q->fname),
+                q->bitmap_size);
+      }
     switch (res) {
 
       case FAULT_NONE:
@@ -4452,7 +4478,10 @@ static void write_stats_file(double bitmap_cvg, double stability, double eps) {
              "fix_send_req      : %u\n"
              "fix_success_rsp   : %u\n"
              "parser_through    : %u\n"
-             "parser_success    : %u\n",       
+             "parser_success    : %u\n"
+             "total_send_messages : %llu\n"
+             "m23_ratio      : %0.02f\n"
+             "m2_ratio       : %0.02f\n",      
              start_time / 1000, get_cur_time() / 1000, getpid(),
              queue_cycle ? (queue_cycle - 1) : 0, total_execs, eps,
              queued_paths, queued_favored, queued_discovered, queued_imported,
@@ -4467,7 +4496,7 @@ static void write_stats_file(double bitmap_cvg, double stability, double eps) {
              (qemu_mode || dumb_mode || no_forkserver || crash_mode ||
               persistent_mode || deferred_mode) ? "" : "default",
              orig_cmdline, slowest_exec_ms,
-             fixed_count, fix_send_req, fix_success_rsp, parser_through, parser_success);
+             fixed_count, fix_send_req, fix_success_rsp, parser_through, parser_success, total_msg_send, region_mutate_ratio, M2_ratio);
              /* ignore errors */
 
   /* Get rss value from the children
@@ -4490,13 +4519,74 @@ static void write_stats_file(double bitmap_cvg, double stability, double eps) {
 }
 
 
+static void check_term_size(void);
+#include <stdatomic.h>
+#include <inttypes.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <time.h>
+#include <errno.h>
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <libgen.h>     // dirname
+#include <sys/stat.h>
+#include <sys/types.h>
+
+static _Atomic uint64_t g_pkt_total = 0;
+static _Atomic uint64_t g_pkt_error = 0;
+static _Atomic uint64_t g_pkt_not_suc = 0;
+static int   stats_fd   = -1;                 // CSV 追加日志（可选）
+static char  stats_path[512];                 // CSV 路径
+static char  state_path[512];                 // 累计状态文件
+static char  state_tmp_path[512];             // 临时文件用于原子覆盖
+
+static void stats_load_state(void) {
+    const char *state = getenv("MOSQ_FUZZ_STATE");
+    if (!state || !*state) state = "/tmp/mosq_fuzz_state.txt";
+    snprintf(state_path, sizeof(state_path), "%s", state);
+    FILE *fp = fopen(state_path, "r");
+    if (!fp) return; // 首次运行，没有就算了
+    uint64_t t=0, e=0, r=0;
+    if (fscanf(fp, "%" SCNu64 " %" SCNu64 " %" SCNu64, &t, &e, &r) == 3) {
+        atomic_store(&g_pkt_total, t);
+        atomic_store(&g_pkt_error, e);
+        atomic_store(&g_pkt_not_suc, r);
+    }
+    fclose(fp);
+}
+
+// static void write_valid_csv(void){
+//     const char *csv = getenv("MOSQ_FUZZ_STATS");
+//     if (!csv || !*csv) csv = "/tmp/mosq_fuzz_stats.csv";
+//     snprintf(stats_path, sizeof(stats_path), "%s", csv);
+
+//     const char *state = getenv("MOSQ_FUZZ_STATE");
+//     if (!state || !*state) state = "/tmp/mosq_fuzz_state.txt";
+//     snprintf(state_path, sizeof(state_path), "%s", state);
+//     snprintf(state_tmp_path, sizeof(state_tmp_path), "%s.tmp", state_path);
+//     stats_fd = open(stats_path, O_CREAT|O_WRONLY|O_APPEND, 0644);
+//     if (stats_fd < 0) return;
+//     stats_load_state();
+//     uint64_t t = atomic_load(&g_pkt_total);
+//     uint64_t e = atomic_load(&g_pkt_error);
+//     uint64_t r = atomic_load(&g_pkt_not_suc);
+//     double   p = (t ? (100.0 * (double)e) / (double)t : 0.0);
+//     double p1 = (total_msg_send ? (100.0 * (double)e) / (double)total_msg_send : 0.0);
+//     double  p2 = (total_msg_send ? (100.0 * (double)r) / (double)total_msg_send : 0.0);
+//     // ts,pid,total,error,err_pct,suc,suc_pct
+//     dprintf(stats_fd, "%ld,%" PRIu64 ",%" PRIu64 ",%.4f,%" PRIu64 ",%.4f\n",
+//         (long)time(NULL), total_msg_send, e, p1, r, p2);
+
+// }
+
 /* Update the plot file if there is a reason to. */
 
 static void maybe_update_plot_file(double bitmap_cvg, double eps) {
 
   static u32 prev_qp, prev_pf, prev_pnf, prev_ce, prev_md;
   static u64 prev_qc, prev_uc, prev_uh;
-
+  stats_load_state();
   if (prev_qp == queued_paths && prev_pf == pending_favored &&
       prev_pnf == pending_not_fuzzed && prev_ce == current_entry &&
       prev_qc == queue_cycle && prev_uc == unique_crashes &&
@@ -4518,10 +4608,13 @@ static void maybe_update_plot_file(double bitmap_cvg, double eps) {
      execs_per_sec */
 
   fprintf(plot_file,
-          "%llu, %llu, %u, %u, %u, %u, %0.02f%%, %llu, %llu, %u, %0.02f\n",
+          "%llu, %llu, %u, %u, %u, %u, %0.02f%%, %llu, %llu, %u, %0.02f, %u, %u, %u, %ld, %llu, %llu\n",
           get_cur_time() / 1000, queue_cycle - 1, current_entry, queued_paths,
           pending_not_fuzzed, pending_favored, bitmap_cvg, unique_crashes,
-          unique_hangs, max_depth, eps); /* ignore errors */
+          unique_hangs, max_depth, eps, M2_start_region_ID, M2_region_count,
+          region_cnt, (long)total_msg_send, (unsigned long long)g_pkt_total,
+          (unsigned long long)g_pkt_not_suc);
+
 
   fflush(plot_file);
 
@@ -4999,6 +5092,7 @@ static void show_stats(void) {
 
     last_stats_ms = cur_ms;
     write_stats_file(t_byte_ratio, stab_ratio, avg_exec);
+    // write_valid_csv();
     save_auto();
     write_bitmap();
 
@@ -5959,6 +6053,14 @@ static u8 could_be_interest(u32 old_val, u32 new_val, u8 blen, u8 check_le) {
 
 }
 
+void region_calculate(int region_count, int M2_start_region_ID, int M2_region_count) {
+  region_total_cnt += region_count;
+  region_mutate_cnt += (region_count - M2_start_region_ID);
+  M2_total_cnt += M2_region_count;
+  region_mutate_ratio = (double)region_mutate_cnt / (double)region_total_cnt;
+  M2_ratio = (double)M2_total_cnt / (double)region_total_cnt;
+  region_cnt = region_count;
+}
 
 /* Take the current entry from the queue, fuzz it for a while. This
    function is a tad too long... returns 0 if fuzzed successfully, 1 if
@@ -6089,7 +6191,7 @@ AFLNET_REGIONS_SELECTION:;
     M2_region_count = UR(total_region - M2_start_region_ID);
     if (M2_region_count == 0) M2_region_count++; //Mutate one region at least
   }
-
+  region_calculate(queue_cur->region_count, M2_start_region_ID, M2_region_count);
   /* Construct the kl_messages linked list and identify boundary pointers (M2_prev and M2_next) */
   kl_messages = construct_kl_messages(queue_cur->fname, queue_cur->regions, queue_cur->region_count);
 
@@ -7170,7 +7272,8 @@ if (!pkt_num) {
 
 }
 
-
+mqtt_packet_t *seed_pkts = malloc(pkt_num * sizeof(*seed_pkts));
+memcpy(seed_pkts, packets, pkt_num * sizeof(*seed_pkts));
   
 // Step 2: Choose a random field in the structured messages and apply LLM-generated mutator to it. Return mutated structured messages(M2').
 stage_name  = "semantic";
@@ -7178,15 +7281,15 @@ stage_short = "sem";
 // Step 3: Repeat Step 2 for a random number of times.
 stage_max   = (doing_det ? HAVOC_CYCLES_INIT : HAVOC_CYCLES) *
                   perf_score / havoc_div / 100;
-
 semantic_queue = queued_paths;
 
 for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
-  
+  memcpy(packets, seed_pkts, pkt_num * sizeof(*seed_pkts));
 
   u32 rounds = rand() % 10 + 1;
+  // u32 rounds = 1;
   if(strcmp(protocol_name, "MQTT") == 0) {
-     dispatch_mqtt_multiple_mutations(packets, pkt_num, rounds);
+    dispatch_mqtt_multiple_mutations(packets, pkt_num, rounds);
   }
   else if(strcmp(protocol_name, "RTSP") == 0){
      dispatch_rtsp_multiple_mutations(packets, pkt_num, rounds);
@@ -7280,7 +7383,8 @@ for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
   }
 
 }
-
+free(packets);
+free(seed_pkts);
 
 real_havoc_stage:
   // goto abandon_entry;
@@ -8569,7 +8673,7 @@ EXP_ST void setup_dirs_fds(void) {
 
   fprintf(plot_file, "# unix_time, cycles_done, cur_path, paths_total, "
                      "pending_total, pending_favs, map_size, unique_crashes, "
-                     "unique_hangs, max_depth, execs_per_sec\n");
+                     "unique_hangs, max_depth, execs_per_sec, M2_start_region_ID, M2_region_count, region_cnt, total_msg_send, server_received_cnt, parser_success\n");
                      /* ignore errors */
 
 }
