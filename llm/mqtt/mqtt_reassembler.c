@@ -62,9 +62,9 @@ int reassemble_a_mqtt_msg(const mqtt_packet_t *pkt, u8 *output_buf, u32 *out_len
             if (con->payload.client_id)
                 payload_len += write_utf8_str(payload_buf + payload_len, con->payload.client_id);
 
-            if (con->payload.will_properties[0]) {
+            if (con->payload.will_property_len > 0 && con->payload.will_properties[0]) {
                 // printf("(reassemble)Will Properties: %s\n", con->payload.will_properties);
-                u32 len = strlen((char *)con->payload.will_properties);
+                u32 len = con->payload.will_property_len;
                 payload_len += write_remaining_length(payload_buf + payload_len, len);
                 memcpy(payload_buf + payload_len, con->payload.will_properties, len);
                 payload_len += len;
@@ -74,7 +74,7 @@ int reassemble_a_mqtt_msg(const mqtt_packet_t *pkt, u8 *output_buf, u32 *out_len
                 payload_len += write_utf8_str(payload_buf + payload_len, con->payload.will_topic);
 
             if (con->payload.will_payload[0]) {
-                u32 len = strlen((char *)con->payload.will_payload);
+                u32 len = con->payload.will_payload_len;
                 write_uint16(payload_buf + payload_len, len);
                 payload_len += 2;
                 memcpy(payload_buf + payload_len, con->payload.will_payload, len);
@@ -85,7 +85,7 @@ int reassemble_a_mqtt_msg(const mqtt_packet_t *pkt, u8 *output_buf, u32 *out_len
                 payload_len += write_utf8_str(payload_buf + payload_len, con->payload.user_name);
 
             if (con->payload.password[0]) {
-                u32 len = strlen((char *)con->payload.password);
+                u32 len = con->payload.password_len;
                 write_uint16(payload_buf + payload_len, len);
                 payload_len += 2;
                 memcpy(payload_buf + payload_len, con->payload.password, len);
@@ -101,8 +101,8 @@ int reassemble_a_mqtt_msg(const mqtt_packet_t *pkt, u8 *output_buf, u32 *out_len
             write_uint16(payload_buf + payload_len, sub->variable_header.packet_identifier);
             payload_len += 2;
 
-            if (sub->variable_header.properties) {
-                u32 len = strlen((char *)sub->variable_header.properties);
+            if (sub->variable_header.property_len > 0 && sub->variable_header.properties) {
+                u32 len = sub->variable_header.property_len;
                 payload_len += write_remaining_length(payload_buf + payload_len, len);
                 memcpy(payload_buf + payload_len, sub->variable_header.properties, len);
                 payload_len += len;
@@ -123,15 +123,15 @@ int reassemble_a_mqtt_msg(const mqtt_packet_t *pkt, u8 *output_buf, u32 *out_len
 
         case TYPE_PUBLISH: {
             const mqtt_publish_packet_t *pub = &pkt->publish;
+            payload_len += write_utf8_str(payload_buf + payload_len, pub->variable_header.topic_name);
+            if(pub->qos!=0){
+                write_uint16(payload_buf + payload_len, pub->variable_header.packet_identifier);
+                payload_len += 2;
+            }
+            
 
-            if (pub->variable_header.topic_name)
-                payload_len += write_utf8_str(payload_buf + payload_len, pub->variable_header.topic_name);
-
-            write_uint16(payload_buf + payload_len, pub->variable_header.packet_identifier);
-            payload_len += 2;
-
-            if (pub->variable_header.properties) {
-                u32 len = strlen((char *)pub->variable_header.properties);
+            if (pub->variable_header.property_len>0 && pub->variable_header.properties[0]) {
+                u32 len = pub->variable_header.property_len;
                 payload_len += write_remaining_length(payload_buf + payload_len, len);
                 memcpy(payload_buf + payload_len, pub->variable_header.properties, len);
                 payload_len += len;
@@ -139,8 +139,8 @@ int reassemble_a_mqtt_msg(const mqtt_packet_t *pkt, u8 *output_buf, u32 *out_len
                 payload_len += write_remaining_length(payload_buf + payload_len, 0);
             }
 
-            if (pub->payload.payload) {
-                u32 len = strlen((char *)pub->payload.payload);
+            if (pub->payload.payload[0]) {
+                u32 len = pub->payload.payload_len;
                 memcpy(payload_buf + payload_len, pub->payload.payload, len);
                 payload_len += len;
             }
@@ -154,8 +154,8 @@ int reassemble_a_mqtt_msg(const mqtt_packet_t *pkt, u8 *output_buf, u32 *out_len
             write_uint16(payload_buf + payload_len, unsub->variable_header.packet_identifier);
             payload_len += 2;
 
-            if (unsub->variable_header.properties) {
-                u32 len = strlen((char *)unsub->variable_header.properties);
+            if (unsub->variable_header.property_len > 0 && unsub->variable_header.properties) {
+                u32 len = unsub->variable_header.property_len;
                 payload_len += write_remaining_length(payload_buf + payload_len, len);
                 memcpy(payload_buf + payload_len, unsub->variable_header.properties, len);
                 payload_len += len;
@@ -176,8 +176,8 @@ int reassemble_a_mqtt_msg(const mqtt_packet_t *pkt, u8 *output_buf, u32 *out_len
 
             payload_buf[payload_len++] = auth->variable_header.reason_code;
 
-            if (auth->variable_header.properties) {
-                u32 len = strlen((char *)auth->variable_header.properties);
+            if (auth->variable_header.property_len > 0 && auth->variable_header.properties) {
+                u32 len = auth->variable_header.property_len;
                 payload_len += write_remaining_length(payload_buf + payload_len, len);
                 memcpy(payload_buf + payload_len, auth->variable_header.properties, len);
                 payload_len += len;
@@ -195,13 +195,30 @@ int reassemble_a_mqtt_msg(const mqtt_packet_t *pkt, u8 *output_buf, u32 *out_len
     // Fixed header
     uint8_t first_byte = 0;
     switch (pkt->type) {
-        case TYPE_CONNECT:    first_byte = 0x10; break;
-        case TYPE_SUBSCRIBE:  first_byte = 0x82; break;
-        case TYPE_PUBLISH:    first_byte = 0x30; break;
-        case TYPE_UNSUBSCRIBE:first_byte = 0xA2; break;
-        case TYPE_AUTH:       first_byte = 0xF0; break;
-        default:              return -1;
+    case TYPE_CONNECT:     first_byte = 0x10; break;
+    case TYPE_SUBSCRIBE:   first_byte = 0x82; break;
+    case TYPE_PUBLISH: {
+        /* PUBLISH 固定头：
+           bits 7..4 = 0x3 (PUBLISH)
+           bit 3     = DUP
+           bits 2..1 = QoS (00/01/10)
+           bit 0     = RETAIN
+        */
+        uint8_t qos    = pkt->publish.qos & 0x03;          /* 只保留低两位，裁剪到 0..2 */
+        uint8_t dup    = pkt->publish.dup ? 1 : 0;
+        uint8_t retain = pkt->publish.retain ? 1 : 0;
+
+        /* 规范上 QoS 0 时 DUP 不应置 1，出于兼容性将其清零 */
+        if (qos == 0) dup = 0;
+
+        first_byte = (uint8_t)(0x30 | (dup << 3) | (qos << 1) | retain);
+        break;
     }
+    case TYPE_UNSUBSCRIBE: first_byte = 0xA2; break;
+    case TYPE_AUTH:        first_byte = 0xF0; break;
+    default:               return -1;
+}
+
 
     output_buf[offset++] = first_byte;
     header_len = write_remaining_length(header_buf, payload_len);

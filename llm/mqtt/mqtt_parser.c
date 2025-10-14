@@ -312,6 +312,7 @@ void print_mqtt_packets(const mqtt_packet_t *pkt, size_t count) {
                 for (size_t i = 0; i < pkt->connect.variable_header.property_len; ++i) {
                     printf("%02X ", pkt->connect.variable_header.properties[i]);
                 }
+                printf("\n");
                 printf("  Client ID     : %s\n", pkt->connect.payload.client_id);
                 // 如有需要，可继续打印 will、username、password 等
                 break;
@@ -322,6 +323,10 @@ void print_mqtt_packets(const mqtt_packet_t *pkt, size_t count) {
                 printf("Remaining Length: %u\n", pkt->subscribe.fixed_header.remaining_length);
                 printf("  Packet ID     : %u\n", pkt->subscribe.variable_header.packet_identifier);
                 printf("  Property Len  : %u\n", pkt->subscribe.variable_header.property_len);
+                for (size_t i = 0; i < pkt->subscribe.variable_header.property_len; ++i) {
+                    printf("%02X ", pkt->subscribe.variable_header.properties[i]);
+                }
+                printf("\n");
                 printf("  Topic Count   : %u\n", pkt->subscribe.payload.topic_count);
 
                 for (int i = 0; i < pkt->subscribe.payload.topic_count; ++i) {

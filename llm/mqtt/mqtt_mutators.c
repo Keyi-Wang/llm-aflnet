@@ -11,6 +11,7 @@
 static int pick_weighted(const int *w, int n) {
     int sum = 0;
     for (int i = 0; i < n; ++i) sum += w[i];
+    if (sum <= 0) return 0;
     int r = rand() % sum;
     for (int i = 0; i < n; ++i) {
         if (r < w[i]) return i;
@@ -26,7 +27,7 @@ void mutate_connect_flags(mqtt_connect_packet_t* pkts, int num_pkts) {
         uint8_t original = pkts[i].variable_header.connect_flags;
         uint8_t mutated = original;
 
-        int weights[7] = {70, 5, 5, 5, 5, 5, 5}; 
+        int weights[7] = {70, 0, 0, 0, 0, 0, 0}; 
         int mut_type = pick_weighted(weights, 7);
 
         switch (mut_type) {
@@ -86,7 +87,7 @@ void mutate_connect_keep_alive(mqtt_connect_packet_t* pkts, int num_pkts) {
         uint16_t orig = pkts[i].variable_header.keep_alive;
         uint16_t mutated = orig;
 
-        int weights[7] = {20, 20, 20, 20, 5, 5, 10}; 
+        int weights[7] = {20, 20, 20, 20, 0, 0, 0}; 
         int strategy = pick_weighted(weights, 7);
 
         switch (strategy) {
@@ -222,49 +223,103 @@ void delete_connect_properties(mqtt_connect_packet_t *packets, int num_packets) 
 }
 
 void mutate_connect_properties(mqtt_connect_packet_t *packets, int num_packets) {
-    // 常见合法属性 ID
-    uint8_t legal_ids[] = {
-        0x11, // Session Expiry Interval
-        0x12, // Receive Maximum
-        0x13, // Maximum Packet Size
-        0x15, // Topic Alias Maximum
-        0x17, // Request Response Information
-        0x19, // Request Problem Information
-        0x21, // User Property (repeatable)
-        0x22, // Authentication Method
-        0x23  // Authentication Data
-    };
-    int legal_id_count = sizeof(legal_ids) / sizeof(legal_ids[0]);
+    if (!packets) return;
+
+    // 规范里的标识码（请按你项目的常量替换）
+    #define PID_SES_EXP   0x11  // Session Expiry Interval (4B)
+    #define PID_RCV_MAX   0x12  // Receive Maximum (2B)
+    #define PID_MAX_PKT   0x13  // Maximum Packet Size (4B)
+    #define PID_TA_MAX    0x22  // Topic Alias Maximum (2B)  // 有些代码里写 0x15，请确认
+    #define PID_REQ_RESP  0x17  // Request Response Information (1B)
+    #define PID_REQ_PROB  0x19  // Request Problem Information (1B)
+    #define PID_USER_PROP 0x26  // User Property (UTF-8 pair)
+    #define PID_AUTH_METH 0x15  // Authentication Method (UTF-8 string)
+    #define PID_AUTH_DATA 0x16  // Authentication Data (Binary Data)
 
     for (int i = 0; i < num_packets; ++i) {
         mqtt_connect_packet_t *pkt = &packets[i];
-        if (pkt->variable_header.protocol_level != 5) continue;
+        if (pkt->variable_header.protocol_level != 5) {
+            pkt->variable_header.property_len = 0;
+            continue;
+        }
 
-        uint32_t prop_len = 0;
+        uint8_t *buf = pkt->variable_header.properties;
         uint32_t pos = 0;
 
-        // 每次属性项数量 1 ~ 10 个
-        int num_props = 1 + rand() % 10;
+        // 工具宏：边界 & 写入
+        #define ENSURE(n) do { if (pos + (uint32_t)(n) > (uint32_t)MAX_PROPERTIES_LEN) goto done; } while (0)
+        #define PUT8(v)   do { ENSURE(1); buf[pos++] = (uint8_t)(v); } while (0)
+        #define PUT16(v)  do { ENSURE(2); buf[pos++] = (uint8_t)(((v)>>8)&0xFF); buf[pos++] = (uint8_t)((v)&0xFF); } while (0)
+        #define PUT32(v)  do { ENSURE(4); buf[pos++] = (uint8_t)(((v)>>24)&0xFF); buf[pos++] = (uint8_t)(((v)>>16)&0xFF); buf[pos++] = (uint8_t)(((v)>>8)&0xFF); buf[pos++] = (uint8_t)((v)&0xFF); } while (0)
+        #define PUT_UTF8(s, maxs) do { \
+            const char *S__ = (s); size_t N__ = S__ ? strnlen(S__, (maxs)) : 0; \
+            if (N__ > 65535) N__ = 65535; ENSURE(2 + N__); PUT16((uint16_t)N__); \
+            if (N__) { memcpy(buf + pos, S__, N__); pos += (uint32_t)N__; } \
+        } while (0)
+        #define PUT_BIN(p, n) do { \
+            uint32_t L__ = (uint32_t)(n); if (L__ > 65535) L__ = 65535; ENSURE(2 + L__); \
+            PUT16((uint16_t)L__); if (L__) { memcpy(buf + pos, (p), L__); pos += L__; } \
+        } while (0)
 
-        for (int j = 0; j < num_props && pos < MAX_PROPERTIES_LEN - 5; ++j) {
-            uint8_t id;
+        // “只出现一次”的属性使用防重标记
+        int used_ses=0, used_rcv=0, used_max=0, used_ta=0, used_rr=0, used_rp=0, used_am=0, used_ad=0;
 
-            id = legal_ids[rand() % legal_id_count]; // 从合法表挑
-
-
-            pkt->variable_header.properties[pos++] = id;
-
-            // 随机值长度：1, 2 或 4
-            int val_len = 1 << (rand() % 3);
-
-
-            for (int k = 0; k < val_len && pos < MAX_PROPERTIES_LEN; ++k) {
-                pkt->variable_header.properties[pos++] = (uint8_t)(rand() & 0xFF);
+        // 生成 1~6 个属性
+        int num_props = 1 + rand() % 6;
+        for (int n = 0; n < num_props; ++n) {
+            int pick = rand() % 9;
+            switch (pick) {
+                case 0: if (!used_ses) { PUT8(PID_SES_EXP); PUT32((uint32_t)(rand()%86400)); used_ses=1; } break;
+                case 1: if (!used_rcv) { PUT8(PID_RCV_MAX); PUT16((uint16_t)(1 + rand()%1024)); used_rcv=1; } break;
+                case 2: if (!used_max) { PUT8(PID_MAX_PKT); PUT32((uint32_t)(512 + rand()%65536)); used_max=1; } break;
+                case 3: if (!used_ta ) { PUT8(PID_TA_MAX ); PUT16((uint16_t)(1 + rand()%100)); used_ta =1; } break;
+                case 4: if (!used_rr ) { PUT8(PID_REQ_RESP); PUT8((uint8_t)(rand()%2)); used_rr=1; } break;
+                case 5: if (!used_rp ) { PUT8(PID_REQ_PROB); PUT8((uint8_t)(rand()%2)); used_rp=1; } break;
+                case 6: { // User Property (可重复)
+                    PUT8(PID_USER_PROP);
+                    PUT_UTF8("key", 32);
+                    PUT_UTF8("val", 32);
+                    break;
+                }
+                case 7: if (!used_am) { // Authentication Method (UTF-8)
+                    PUT8(PID_AUTH_METH);
+                    PUT_UTF8("PLAIN", 64);
+                    used_am=1;
+                    break;
+                }
+                case 8: if (!used_ad) { // Authentication Data (Binary)
+                    uint8_t tmp[16]; int L = 4 + rand()%8;
+                    for (int t=0;t<L;++t) tmp[t]=(uint8_t)rand();
+                    PUT8(PID_AUTH_DATA);
+                    PUT_BIN(tmp, L);
+                    used_ad=1;
+                    break;
+                }
             }
         }
-        pkt->variable_header.property_len = num_props;
+
+    done:
+        pkt->variable_header.property_len = pos;
+
+        #undef ENSURE
+        #undef PUT8
+        #undef PUT16
+        #undef PUT32
+        #undef PUT_UTF8
+        #undef PUT_BIN
     }
+
+    #undef PID_SES_EXP
+    #undef PID_RCV_MAX
+    #undef PID_MAX_PKT
+    #undef PID_TA_MAX
+    #undef PID_REQ_RESP
+    #undef PID_REQ_PROB
+    #undef PID_USER_PROP
+    #undef PID_AUTH_METH
+    #undef PID_AUTH_DATA
 }
+
 
 
 void add_connect_client_id(mqtt_connect_packet_t *packets, int num_packets) {
@@ -289,7 +344,7 @@ void mutate_connect_client_id(mqtt_connect_packet_t *packets, int num_packets) {
     for (int i = 0; i < num_packets; ++i) {
         char *cid = packets[i].payload.client_id;
         int orig_len = strlen(cid);
-        int weights[8] = {5, 70, 5, 5, 5, 5, 5, 5}; 
+        int weights[8] = {0, 70, 0, 0, 0, 0, 0, 0}; 
         int mut_type = pick_weighted(weights, 8);
 
         switch (mut_type) {
@@ -439,15 +494,99 @@ void mutate_connect_will_property_len(mqtt_connect_packet_t *packets, int num_pa
 }
 
 void add_connect_will_properties(mqtt_connect_packet_t *packets, int num_packets) {
+    /* Will Properties 标识符 */
+    #define PID_PFI     0x01  /* Payload Format Indicator: 1 byte (0 or 1) */
+    #define PID_MEI     0x02  /* Message Expiry Interval: 4 bytes (uint32) */
+    #define PID_CT      0x03  /* Content Type: UTF-8 string */
+    #define PID_RT      0x08  /* Response Topic: UTF-8 string */
+    #define PID_CD      0x09  /* Correlation Data: Binary Data */
+    #define PID_WDI     0x18  /* Will Delay Interval: 4 bytes (uint32) */
+    #define PID_UP      0x26  /* User Property: UTF-8 string pair (Key, Value) */
+
     for (int i = 0; i < num_packets; i++) {
-        if ((packets[i].variable_header.connect_flags & 0x04) && packets[i].payload.will_property_len == 0) {
-            packets[i].payload.will_property_len = rand() % 10 + 1;
-            for (uint32_t j = 0; j < packets[i].payload.will_property_len; j++) {
-                packets[i].payload.will_properties[j] = rand() % 256;
+        mqtt_connect_packet_t *pkt = &packets[i];
+
+        uint8_t *buf = pkt->payload.will_properties;
+        uint32_t pos = 0;
+
+        /* 安全写入工具 */
+        #define ENSURE(n) do { if (pos + (uint32_t)(n) > (uint32_t)MAX_PROPERTIES_LEN) goto finish; } while (0)
+        #define PUT8(v)   do { ENSURE(1); buf[pos++] = (uint8_t)(v); } while (0)
+        #define PUT16(v)  do { ENSURE(2); buf[pos++] = (uint8_t)(((v)>>8)&0xFF); buf[pos++] = (uint8_t)((v)&0xFF); } while (0)
+        #define PUT32(v)  do { ENSURE(4); buf[pos++] = (uint8_t)(((v)>>24)&0xFF); buf[pos++] = (uint8_t)(((v)>>16)&0xFF); buf[pos++] = (uint8_t)(((v)>>8)&0xFF); buf[pos++] = (uint8_t)((v)&0xFF); } while (0)
+        #define PUT_UTF8_LIT(s) do { \
+            const char *S__ = (s); size_t N__ = S__ ? strlen(S__) : 0; \
+            if (N__ > 65535) N__ = 65535; ENSURE(2 + N__); \
+            PUT16((uint16_t)N__); if (N__) { memcpy(buf + pos, S__, N__); pos += (uint32_t)N__; } \
+        } while (0)
+        #define PUT_BIN_RAND(minLen, maxLen) do { \
+            int L__ = (minLen) + rand() % ((maxLen) - (minLen) + 1); \
+            if (L__ > 65535) L__ = 65535; ENSURE(2 + L__); \
+            PUT16((uint16_t)L__); \
+            for (int __k = 0; __k < L__; ++__k) buf[pos + __k] = (uint8_t)rand(); \
+            pos += (uint32_t)L__; \
+        } while (0)
+
+        int strategy = rand() % 6;
+        switch (strategy) {
+            case 0: /* 仅 PFI=1（UTF-8 文本 Will Payload） */
+                PUT8(PID_PFI); PUT8(1);
+                break;
+            case 1: /* 仅 Message Expiry Interval（0~3600 秒） */
+                PUT8(PID_MEI); PUT32((uint32_t)(rand() % 3601));
+                break;
+            case 2: /* 仅 Will Delay Interval（0~600 秒） */
+                PUT8(PID_WDI); PUT32((uint32_t)(rand() % 601));
+                break;
+            case 3: /* Content Type: text/plain */
+                PUT8(PID_CT); PUT_UTF8_LIT("text/plain");
+                break;
+            case 4: /* Response Topic: reply/topic */
+                PUT8(PID_RT); PUT_UTF8_LIT("reply/topic");
+                break;
+            case 5: /* Correlation Data: 8~24 随机字节 */
+                PUT8(PID_CD); PUT_BIN_RAND(8, 24);
+                break;
+        }
+
+        /* 追加 0~2 个 User Property（可重复） */
+        {
+            static const char *keys[] = {"source", "priority", "note", "device"};
+            static const char *vals[] = {"sensor1", "high", "ok", "edge"};
+            int upn = rand() % 3; /* 0..2 */
+            for (int t = 0; t < upn; ++t) {
+                PUT8(PID_UP);
+                PUT_UTF8_LIT(keys[rand() % 4]);
+                PUT_UTF8_LIT(vals[rand() % 4]);
             }
         }
+
+finish:
+        /* 兜底：若因为边界等原因未能写入任何属性，保证至少有 PFI=0 */
+        if (pos == 0) {
+            ENSURE(2);
+            PUT8(PID_PFI); PUT8(0);
+        }
+
+        pkt->payload.will_property_len = pos;
+
+        #undef ENSURE
+        #undef PUT8
+        #undef PUT16
+        #undef PUT32
+        #undef PUT_UTF8_LIT
+        #undef PUT_BIN_RAND
     }
+
+    #undef PID_PFI
+    #undef PID_MEI
+    #undef PID_CT
+    #undef PID_RT
+    #undef PID_CD
+    #undef PID_WDI
+    #undef PID_UP
 }
+
 
 void delete_connect_will_properties(mqtt_connect_packet_t *packets, int num_packets) {
     for (int i = 0; i < num_packets; i++) {
@@ -474,7 +613,7 @@ void mutate_connect_will_properties(mqtt_connect_packet_t *packets, int num_pack
         mqtt_connect_packet_t *pkt = &packets[i];
         uint8_t *props = pkt->payload.will_properties;
 
-        int weights[8] = {40, 40, 5, 5, 5, 5, 5, 5}; 
+        int weights[8] = {40, 40, 0, 0, 0, 0, 0, 0}; 
         int strategy = pick_weighted(weights, 8);
 
         switch (strategy) {
@@ -616,7 +755,7 @@ void mutate_connect_will_topic(mqtt_connect_packet_t *packets, int num_packets) 
 
         if (!(packets[i].variable_header.connect_flags & 0x04)) continue;  // WillFlag=1
 
-        int weights[6] = {30, 50, 5, 5, 5, 5}; 
+        int weights[6] = {0, 50, 0, 0, 0, 0}; 
         int strategy = pick_weighted(weights, 6);
         char *topic = packets[i].payload.will_topic;
 
@@ -730,7 +869,7 @@ void mutate_connect_will_payload(mqtt_connect_packet_t *packets, int num_packets
 
         if (!(packets[i].variable_header.connect_flags & 0x04)) continue; // 仅在 WillFlag=1 时生效
 
-        int weights[7] = {70, 5, 5, 5, 5, 5, 5}; 
+        int weights[7] = {70, 0, 0, 0, 0, 0, 0}; 
         int strategy = pick_weighted(weights, 7);
         uint8_t *payload = packets[i].payload.will_payload;
         uint16_t *len = &packets[i].payload.will_payload_len;
@@ -893,7 +1032,7 @@ void mutate_connect_user_name(mqtt_connect_packet_t *packets, int num_packets) {
         // 如果未启用 User Name Flag，则跳过
         if (!(pkt->variable_header.connect_flags & 0x80)) continue;
 
-        int weights[7] = {70, 10, 5, 5, 5, 5, 5}; 
+        int weights[7] = {70, 0, 0, 0, 0, 0, 0}; 
         int strategy = pick_weighted(weights, 7);
 
         switch (strategy) {
@@ -1000,7 +1139,7 @@ void mutate_connect_password(mqtt_connect_packet_t *packets, int num_packets) {
         // 若未启用 Password Flag，则跳过
         if (!(pkt->variable_header.connect_flags & 0x40)) continue;
 
-        int weights[8] = {70, 5, 5, 5, 5, 5, 5, 5}; 
+        int weights[8] = {70, 0, 0, 0, 0, 0, 0, 0}; 
         int strategy = pick_weighted(weights, 8);
 
         switch (strategy) {
@@ -1132,7 +1271,7 @@ void mutate_subscribe_packet_identifier(mqtt_subscribe_packet_t *subs, size_t nu
         mqtt_subscribe_packet_t *pkt = &subs[i];
         uint16_t original = pkt->variable_header.packet_identifier;
         uint16_t mutated = original;
-        int weights[10] = {5, 40, 40, 10, 10, 10, 40, 40, 40, 40}; 
+        int weights[10] = {0, 40, 40, 0, 0, 0, 40, 40, 40, 40}; 
         int strategy = pick_weighted(weights, 10);
         switch (strategy) {
             case 0: // 设置为0（非法，MQTT规定Packet ID不能为0）
@@ -1171,164 +1310,313 @@ void mutate_subscribe_packet_identifier(mqtt_subscribe_packet_t *subs, size_t nu
         pkt->variable_header.packet_identifier = mutated;
     }
 }
+/* ===== 工具：VarInt 编码、UTF-8/边界写入 ===== */
+static inline size_t write_varint(uint8_t *dst, uint32_t v) {
+    size_t n = 0;
+    do {
+        uint8_t byte = v % 128;
+        v /= 128;
+        if (v > 0) byte |= 0x80;
+        dst[n++] = byte;
+    } while (v > 0 && n < 4);
+    return n; /* 1..4 */
+}
+
+static inline int ensure_space(uint32_t pos, uint32_t need, uint32_t limit) {
+    return (pos + need <= limit);
+}
+
+static inline void put16(uint8_t *b, uint16_t v) {
+    b[0] = (uint8_t)((v >> 8) & 0xFF);
+    b[1] = (uint8_t)(v & 0xFF);
+}
+
+/* 计算一条已编码的 User Property 从 props[pos] 开始的总字节数；非法返回 0 */
+static uint32_t peek_user_property_len(const uint8_t *props, uint32_t plen, uint32_t pos) {
+    if (pos >= plen || props[pos] != 0x26) return 0;
+    uint32_t r = pos + 1;
+    if (r + 2 > plen) return 0;
+    uint16_t klen = (props[r] << 8) | props[r+1]; r += 2;
+    if (r + klen + 2 > plen) return 0;
+    r += klen;
+    uint16_t vlen = (props[r] << 8) | props[r+1]; r += 2;
+    if (r + vlen > plen) return 0;
+    r += vlen;
+    return r - pos; /* 总长度 */
+}
+
+/* ===== 仅生成合法变异：SUBSCRIBE Properties ===== */
 
 void mutate_subscribe_properties(mqtt_subscribe_packet_t *subs, size_t num_subs) {
+    if (!subs) return;
+
     for (size_t i = 0; i < num_subs; ++i) {
         mqtt_subscribe_packet_t *pkt = &subs[i];
         uint8_t *props = pkt->variable_header.properties;
-        uint32_t *plen = &pkt->variable_header.property_len;
+        uint32_t pos = 0;
 
-        if (*plen > MAX_PROPERTIES_LEN) continue;
-        int weights[10] = {40, 10, 5, 10, 10, 10, 5, 5, 10, 5}; 
-        int strategy = pick_weighted(weights, 10);
-        switch (strategy) {
-            case 0: // 清空属性
-                *plen = 0;
-                break;
-            case 1: // 重复属性
-                if (*plen * 2 < MAX_PROPERTIES_LEN) {
-                    memcpy(props + *plen, props, *plen);
-                    *plen *= 2;
-                }
-                break;
-            case 2: // 插入无效属性 ID
-                if (*plen < MAX_PROPERTIES_LEN - 1)
-                    props[(*plen)++] = 0xFF; // 未定义属性
-                break;
-            case 3: // bit flip
-                if (*plen > 0)
-                    props[rand() % *plen] ^= 0xFF;
-                break;
-            case 4: // 增加乱序 User Property
-                if (*plen < MAX_PROPERTIES_LEN - 10) {
-                    uint8_t tmp[] = {0x26, 0x00, 0x01, 'X', 0x00, 0x01, 'Y'};
-                    memcpy(props + *plen, tmp, sizeof(tmp));
-                    *plen += sizeof(tmp);
-                }
-                break;
-            case 5: // 裁剪一半
-                *plen /= 2;
-                break;
-            case 6: // 扩展 property_len 超实际长度
-                *plen += 5;  // 让 property_len > 实际字节，测试 parser
-                break;
-            case 7: // 插入 Subscription Identifier (0x0B)
-                if (*plen < MAX_PROPERTIES_LEN - 2) {
-                    props[(*plen)++] = 0x0B;
-                    props[(*plen)++] = rand() % 128;
-                }
-                break;
-            case 8: // 随机覆盖属性区
-                for (int j = 0; j < 10 && *plen + j < MAX_PROPERTIES_LEN; j++) {
-                    props[*plen + j] = rand() % 256;
-                }
-                *plen += 10;
-                break;
-            case 9: // 设置为全0
-                memset(props, 0, *plen);
-                break;
+        /* 策略：重建一个新的、合法的属性区 */
+        /* 50% 是否带 Subscription Identifier（值范围 1..16383，足够且短编码） */
+        if (rand() % 2) {
+            uint8_t tmp[4];
+            uint32_t sid = 1u + (rand() % 16383u);
+            if (!ensure_space(pos, 1, MAX_PROPERTIES_LEN)) goto done;
+            props[pos++] = 0x0B; /* Subscription Identifier */
+            size_t vn = write_varint(tmp, sid);
+            if (!ensure_space(pos, (uint32_t)vn, MAX_PROPERTIES_LEN)) goto done;
+            memcpy(props + pos, tmp, vn); pos += (uint32_t)vn;
         }
+
+        /* 追加 0..3 个 User Property（Key/Value 为合法 UTF-8） */
+        static const char *keys[] = {"source", "priority", "note", "device"};
+        static const char *vals[] = {"sensor1", "high", "ok", "edge"};
+        int upn = rand() % 4; /* 0..3 */
+        for (int t = 0; t < upn; ++t) {
+            const char *k = keys[rand() % 4];
+            const char *v = vals[rand() % 4];
+            uint16_t klen = (uint16_t)strlen(k);
+            uint16_t vlen = (uint16_t)strlen(v);
+
+            uint32_t need = 1 + 2 + klen + 2 + vlen;
+            if (!ensure_space(pos, need, MAX_PROPERTIES_LEN)) break;
+
+            props[pos++] = 0x26;                /* User Property */
+            put16(props + pos, klen); pos += 2; memcpy(props + pos, k, klen); pos += klen;
+            put16(props + pos, vlen); pos += 2; memcpy(props + pos, v, vlen); pos += vlen;
+        }
+
+    done:
+        pkt->variable_header.property_len = pos; /* 字节长度 */
     }
 }
 
 void add_subscribe_properties(mqtt_subscribe_packet_t *subs, size_t num_subs) {
+    if (!subs) return;
+
     for (size_t i = 0; i < num_subs; ++i) {
         mqtt_subscribe_packet_t *pkt = &subs[i];
+        uint8_t *p = pkt->variable_header.properties;
+        uint32_t plen = pkt->variable_header.property_len;
 
-        if (pkt->variable_header.property_len >= MAX_PROPERTIES_LEN - 5) continue;
+        /* 优先：若尚无 Subscription Identifier，则添加一个（合法 VarInt，短编码） */
+        int has_sid = 0;
+        for (uint32_t j = 0; j < plen; ) {
+            if (p[j] == 0x0B) { has_sid = 1; break; }
+            else if (p[j] == 0x26) {
+                uint32_t step = peek_user_property_len(p, plen, j);
+                if (step == 0) { has_sid = 1; break; } /* 结构异常时不再操作 */
+                j += step;
+            } else {
+                has_sid = 1; break; /* 非法/未知结构，避免再写导致不一致 */
+            }
+        }
 
-        // 添加一个简单的 User Property（Identifier = 0x26）
-        uint8_t *p = pkt->variable_header.properties + pkt->variable_header.property_len;
-        size_t offset = 0;
+        if (!has_sid) {
+            uint8_t tmp[4]; uint32_t sid = 1u + (rand() % 16383u);
+            size_t vn = write_varint(tmp, sid);
+            if (ensure_space(plen, 1 + (uint32_t)vn, MAX_PROPERTIES_LEN)) {
+                p[plen++] = 0x0B;
+                memcpy(p + plen, tmp, vn); plen += (uint32_t)vn;
+                pkt->variable_header.property_len = plen;
+                continue;
+            }
+        }
 
-        p[offset++] = 0x26; // User Property identifier
+        /* 其次：追加一条合法 User Property（不破坏现有结构） */
+        {
+            const char *k = "foo";
+            const char *v = "bar";
+            uint16_t klen = (uint16_t)strlen(k), vlen = (uint16_t)strlen(v);
+            uint32_t need = 1 + 2 + klen + 2 + vlen;
 
-        // Key = "foo"
-        p[offset++] = 0;
-        p[offset++] = 3;
-        p[offset++] = 'f';
-        p[offset++] = 'o';
-        p[offset++] = 'o';
-
-        // Value = "bar"
-        p[offset++] = 0;
-        p[offset++] = 3;
-        p[offset++] = 'b';
-        p[offset++] = 'a';
-        p[offset++] = 'r';
-
-        pkt->variable_header.property_len += offset;
+            if (ensure_space(plen, need, MAX_PROPERTIES_LEN)) {
+                p[plen++] = 0x26;
+                put16(p + plen, klen); plen += 2; memcpy(p + plen, k, klen); plen += klen;
+                put16(p + plen, vlen); plen += 2; memcpy(p + plen, v, vlen); plen += vlen;
+                pkt->variable_header.property_len = plen;
+            }
+        }
     }
 }
 
 void delete_subscribe_properties(mqtt_subscribe_packet_t *subs, size_t num_subs) {
+    if (!subs) return;
     for (size_t i = 0; i < num_subs; ++i) {
         subs[i].variable_header.property_len = 0;
         memset(subs[i].variable_header.properties, 0, MAX_PROPERTIES_LEN);
     }
 }
 
+/* 合法“重复”：只复制一条现有的 User Property（若存在），不复制 Subscription Identifier */
 void repeat_subscribe_properties(mqtt_subscribe_packet_t *subs, size_t num_subs) {
+    if (!subs) return;
+
     for (size_t i = 0; i < num_subs; ++i) {
         mqtt_subscribe_packet_t *pkt = &subs[i];
-        size_t len = pkt->variable_header.property_len;
+        uint8_t *p = pkt->variable_header.properties;
+        uint32_t plen = pkt->variable_header.property_len;
 
-        if (len > 0 && len * 2 < MAX_PROPERTIES_LEN) {
-            memcpy(pkt->variable_header.properties + len, pkt->variable_header.properties, len);
-            pkt->variable_header.property_len *= 2;
+        /* 找到第一条可完整解析的 User Property */
+        uint32_t up_pos = 0, up_len = 0, j = 0;
+        while (j < plen) {
+            if (p[j] == 0x26) {
+                uint32_t step = peek_user_property_len(p, plen, j);
+                if (step == 0) break; /* 结构异常，停止 */
+                up_pos = j; up_len = step; break;
+            } else if (p[j] == 0x0B) {
+                /* 跳过 Subscription Identifier（VarInt） */
+                uint32_t k = j + 1, mul = 1, count = 0;
+                /* 解析 VarInt 长度以便跳过（最多 4 字节） */
+                while (k < plen && count < 4) {
+                    uint8_t b = p[k++]; count++;
+                    if (!(b & 0x80)) break;
+                }
+                j = k;
+            } else {
+                /* 遇到未知/异常，放弃重复以避免破坏结构 */
+                up_len = 0; break;
+            }
+        }
+
+        if (up_len == 0) continue; /* 没有可重复的 UP */
+
+        /* 追加一份相同的 User Property */
+        if (ensure_space(plen, up_len, MAX_PROPERTIES_LEN)) {
+            memcpy(p + plen, p + up_pos, up_len);
+            pkt->variable_header.property_len = plen + up_len;
         }
     }
 }
 
 
 void mutate_subscribe_topic_filter(mqtt_subscribe_packet_t *subs, size_t num_subs) {
-    const char *wildcards[] = {"#", "+", "/#", "a/#/b", "+/+"};
-    const char *bad_topics[] = {"", " ", "///", "#/#", "#+", "invalid\x01topic"};
-    const char *valid_topics[] = {"sensor/temperature", "device/+/status", "home/+/light/#", "foo", "a/b/c/d"};
+    // 一些“确定合法”的模板
+    static const char *legal_wildcards[] = {
+        "#",                 // 匹配所有主题
+        "+",                 // 单层通配
+        "+/+",               // 两层单层通配
+        "devices/+/status",  // 中间层使用 '+'
+        "sensor/#"           // 末尾使用 '#'
+    };
+    enum { LEGAL_WC_COUNT = (int)(sizeof(legal_wildcards)/sizeof(legal_wildcards[0])) };
+
+    // 合法的主题字符（不含通配符；通配符由策略控制加入）
+    static const char legal_chars[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-";
 
     for (size_t i = 0; i < num_subs; ++i) {
         mqtt_subscribe_packet_t *pkt = &subs[i];
 
         for (int j = 0; j < pkt->payload.topic_count; ++j) {
             char *filter = pkt->payload.topic_filters[j].topic_filter;
-            int weights[10] = {40, 5, 5, 10, 10, 40, 10, 40, 5, 40}; 
-            int strategy = pick_weighted(weights, 10);
+
+            // 6 种“保证合法”的策略
+            int weights[6] = {20, 20, 20, 20, 10, 10};
+            int strategy = pick_weighted(weights, 6);
+
+            // 小工具：安全追加字符/字符串（保证不越界、不丢 '\0'）
+            int pos = 0;
+            #define APPEND_CHAR(ch) do { \
+                if (pos < MAX_TOPIC_LEN - 1) { filter[pos++] = (char)(ch); filter[pos] = '\0'; } \
+            } while (0)
+            #define APPEND_STR(sz) do { \
+                const char *___s = (sz); \
+                while (*___s && pos < MAX_TOPIC_LEN - 1) { filter[pos++] = *___s++; } \
+                filter[pos] = '\0'; \
+            } while (0)
+            #define APPEND_LEVEL_FROM_SET() do { \
+                int lvl_len = 1 + rand() % 8; \
+                for (int __t = 0; __t < lvl_len && pos < MAX_TOPIC_LEN - 1; ++__t) { \
+                    APPEND_CHAR( legal_chars[rand() % (int)(sizeof(legal_chars) - 1)] ); \
+                } \
+            } while (0)
+            #define APPEND_SLASH_IF_NEEDED() do { \
+                if (pos > 0 && filter[pos-1] != '/' && pos < MAX_TOPIC_LEN - 1) { APPEND_CHAR('/'); } \
+            } while (0)
+
+            filter[0] = '\0'; // 先清空
+
             switch (strategy) {
-                case 0: // 替换为通配符
-                    strncpy(filter, wildcards[rand() % 5], MAX_TOPIC_LEN);
+                case 0: { // 直接使用一条“已知合法”的模板
+                    APPEND_STR(legal_wildcards[rand() % LEGAL_WC_COUNT]);
                     break;
-                case 1: // 替换为非法主题（空串、包含控制字符）
-                    strncpy(filter, bad_topics[rand() % 6], MAX_TOPIC_LEN);
-                    break;
-                case 2: // 添加无效字符
-                    snprintf(filter, MAX_TOPIC_LEN, "topic/invalid/%c", rand() % 32);  // 控制字符
-                    break;
-                case 3: // Bit flip 第一个字符
-                    if (strlen(filter) > 0) filter[0] ^= 0xFF;
-                    break;
-                case 4: // 变成随机 ASCII 串
-                    for (int k = 0; k < 10; ++k) {
-                        filter[k] = (char)(33 + rand() % 94); // 可打印 ASCII
+                }
+
+                case 1: { // 纯静态合法路径：1~4 层，每层由合法字符组成
+                    int levels = 1 + rand() % 4;
+                    for (int l = 0; l < levels; ++l) {
+                        if (l) APPEND_CHAR('/');
+                        APPEND_LEVEL_FROM_SET();
                     }
-                    filter[10] = '\0';
+                    if (pos == 0) { APPEND_CHAR('a'); } // 保证非空
                     break;
-                case 5: // 合法但复杂 filter
-                    strncpy(filter, valid_topics[rand() % 5], MAX_TOPIC_LEN);
+                }
+
+                case 2: { // 含 '+' 的合法过滤器：2~4 层，随机 1~2 层使用 '+'
+                    int levels = 2 + rand() % 3;           // 2..4 层
+                    int plus_cnt = 1 + rand() % 2;         // 1..2 个 '+'
+                    // 随机选择放置 '+' 的层索引（不重复）
+                    int plus_at[2] = {-1, -1};
+                    for (int p = 0; p < plus_cnt; ++p) {
+                        int idx;
+                        do { idx = rand() % levels; } while ((p == 1 && idx == plus_at[0]));
+                        plus_at[p] = idx;
+                    }
+                    for (int l = 0; l < levels; ++l) {
+                        if (l) APPEND_CHAR('/');
+                        if (l == plus_at[0] || l == plus_at[1]) {
+                            APPEND_CHAR('+');           // 单层通配符
+                        } else {
+                            APPEND_LEVEL_FROM_SET();
+                        }
+                    }
                     break;
-                case 6: // 插入多个斜杠
-                    strncpy(filter, "///a///b///", MAX_TOPIC_LEN);
+                }
+
+                case 3: { // 末尾 '#': 0~3 个静态层 + "/#" 或仅 "#"
+                    int levels = rand() % 4; // 0..3
+                    if (levels == 0) {
+                        APPEND_CHAR('#');               // 单独一个 '#'
+                    } else {
+                        for (int l = 0; l < levels; ++l) {
+                            if (l) APPEND_CHAR('/');
+                            APPEND_LEVEL_FROM_SET();
+                        }
+                        APPEND_CHAR('/'); APPEND_CHAR('#'); // 末尾 "#"
+                    }
                     break;
-                case 7: // 长度扩展至最大
-                    memset(filter, 'a', MAX_TOPIC_LEN - 1);
-                    filter[MAX_TOPIC_LEN - 1] = '\0';
+                }
+
+                case 4: { // 构造“比较长但合法”的过滤器（接近上限）
+                    // 用 "aaaa/aaaa/..." 直到接近 MAX_TOPIC_LEN
+                    while (pos < MAX_TOPIC_LEN - 1) {
+                        int left = (MAX_TOPIC_LEN - 1) - pos;
+                        if (left <= 5) { // 留点空间，避免最后一个字符是 '/'
+                            break;
+                        }
+                        if (pos) APPEND_CHAR('/');
+                        int seg = 4 + rand() % 8; // 每段 4..11 个字母
+                        for (int s = 0; s < seg && pos < MAX_TOPIC_LEN - 1; ++s) APPEND_CHAR('a' + (rand() % 26));
+                    }
+                    // 如果末尾是 '/'，删掉它
+                    if (pos > 0 && filter[pos-1] == '/') { filter[--pos] = '\0'; }
+                    if (pos == 0) { APPEND_CHAR('a'); }     // 保底
                     break;
-                case 8: // 清空
-                    filter[0] = '\0';
+                }
+
+                case 5: { // 拷贝前一个合法 filter（若 j==0 则退化为 "sensor/#"）
+                    if (j > 0) {
+                        strncpy(filter, pkt->payload.topic_filters[j - 1].topic_filter, MAX_TOPIC_LEN - 1);
+                        filter[MAX_TOPIC_LEN - 1] = '\0';
+                    } else {
+                        APPEND_STR("sensor/#");
+                    }
                     break;
-                case 9: // 拷贝前一个 filter（模拟重复）
-                    if (j > 0) strncpy(filter, pkt->payload.topic_filters[j - 1].topic_filter, MAX_TOPIC_LEN);
-                    break;
+                }
             }
+
+            // 双重保险：不允许空、也不允许超长
+            if (filter[0] == '\0') { strncpy(filter, "a", MAX_TOPIC_LEN - 1); filter[MAX_TOPIC_LEN - 1] = '\0'; }
+            filter[MAX_TOPIC_LEN - 1] = '\0';
         }
     }
 }
@@ -1353,7 +1641,7 @@ void repeat_subscribe_topic_filter(mqtt_subscribe_packet_t *subs, size_t num_sub
 
         // 可选：对复制后的 qos 进行微调（如随机变异）
         if (rand() % 2 == 0) {  // 50% 概率随机改动 qos
-            pkt->payload.topic_filters[new_index].qos = rand() % 4;  // 可包含非法值测试解析器
+            pkt->payload.topic_filters[new_index].qos = rand() % 3;  // 可包含非法值测试解析器
         }
 
         pkt->payload.topic_count++;
@@ -1365,7 +1653,7 @@ void mutate_subscribe_qos(mqtt_subscribe_packet_t *subs, size_t num_subs) {
         mqtt_subscribe_packet_t *pkt = &subs[i];
         for (int j = 0; j < pkt->payload.topic_count; ++j) {
             uint8_t *qos = &pkt->payload.topic_filters[j].qos;
-            int weights[10] = {40, 40, 40, 5, 5, 10, 5, 10, 10, 40}; 
+            int weights[10] = {40, 40, 40, 0, 0, 0, 0, 0, 0, 40}; 
             int strategy = pick_weighted(weights, 10);
             switch (strategy) {
                 case 0: // 设置为合法值0
@@ -1407,7 +1695,7 @@ void mutate_subscribe_topic_count(mqtt_subscribe_packet_t *subs, size_t num_subs
     for (size_t i = 0; i < num_subs; ++i) {
         mqtt_subscribe_packet_t *pkt = &subs[i];
         uint8_t *count = &pkt->payload.topic_count;
-        int weights[10] = {5, 40, 5, 40, 40, 5, 10, 10, 10, 10}; 
+        int weights[10] = {0, 40, 0, 40, 40, 0, 0, 0, 0, 0}; 
         int strategy = pick_weighted(weights, 10);
         switch (strategy) {
             case 0: // 设置为 0（非法，必须至少有一个 topic）
@@ -1473,7 +1761,7 @@ void delete_publish_topic_name(mqtt_publish_packet_t *pkts, size_t num) {
 void mutate_publish_topic_name(mqtt_publish_packet_t *pkts, size_t num) {
     for (size_t i = 0; i < num; ++i) {
         char *topic = pkts[i].variable_header.topic_name;
-        int weights[10] = {5, 40, 40, 5, 5, 40, 10, 40, 10, 40}; 
+        int weights[10] = { 0, 0, 0, 0, 0, 0, 0, 50, 0, 0}; 
         int strategy = pick_weighted(weights, 10);
         switch (strategy) {
             case 0:  // 设置为空串（非法，除非使用 Topic Alias）
@@ -1538,7 +1826,7 @@ void mutate_publish_packet_identifier(mqtt_publish_packet_t *pkts, size_t num) {
 
         // 若 QoS == 0，该字段无意义；我们故意做边界测试
         uint16_t *id = &pkt->variable_header.packet_identifier;
-        int weights[10] = {5, 40, 40, 40, 10, 40, 40, 10, 10, 10}; 
+        int weights[10] = {0, 40, 40, 40, 0, 40, 40, 0, 0, 0}; 
         int strategy = pick_weighted(weights, 10);
         switch (strategy) {
             case 0: *id = 0; break;                     // 非法值（当 QoS > 0）
@@ -1555,98 +1843,262 @@ void mutate_publish_packet_identifier(mqtt_publish_packet_t *pkts, size_t num) {
     }
 }
 
+/* ===== PUBLISH Properties: helpers ===== */
+static inline int pp_ensure(uint32_t pos, uint32_t need, uint32_t limit) {
+    return (pos + need <= limit);
+}
+static inline void pp_put16(uint8_t *b, uint16_t v) {
+    b[0] = (uint8_t)((v >> 8) & 0xFF);
+    b[1] = (uint8_t)(v & 0xFF);
+}
+static inline void pp_put32(uint8_t *b, uint32_t v) {
+    b[0] = (uint8_t)((v >> 24) & 0xFF);
+    b[1] = (uint8_t)((v >> 16) & 0xFF);
+    b[2] = (uint8_t)((v >> 8) & 0xFF);
+    b[3] = (uint8_t)(v & 0xFF);
+}
+
+/* 计算从 props[pos] 开始的一条 User Property 的总长度；非法返回 0 */
+static uint32_t peek_publish_user_property_len(const uint8_t *props, uint32_t plen, uint32_t pos) {
+    if (pos >= plen || props[pos] != 0x26) return 0;
+    uint32_t r = pos + 1;
+    if (r + 2 > plen) return 0;
+    uint16_t klen = (uint16_t)((props[r] << 8) | props[r+1]); r += 2;
+    if (r + klen + 2 > plen) return 0;
+    r += klen;
+    uint16_t vlen = (uint16_t)((props[r] << 8) | props[r+1]); r += 2;
+    if (r + vlen > plen) return 0;
+    r += vlen;
+    return r - pos;
+}
+
+/* ===== add_publish_properties: 若为空则补一组合法属性 ===== */
 void add_publish_properties(mqtt_publish_packet_t *pkts, size_t num) {
+    if (!pkts) return;
+
     for (size_t i = 0; i < num; ++i) {
         mqtt_publish_packet_t *pkt = &pkts[i];
+        if (pkt->variable_header.property_len != 0) continue;
 
-        if (pkt->variable_header.property_len == 0) {
-            // 构造一个简单属性，例如 Payload Format Indicator (ID: 0x01, value: 0x01)
-            pkt->variable_header.properties[0] = 0x01;  // ID
-            pkt->variable_header.properties[1] = 0x01;  // value
-            pkt->variable_header.property_len = 2;
-        }
-    }
-}
+        uint8_t *buf = pkt->variable_header.properties;
+        uint32_t pos = 0;
 
-void delete_publish_properties(mqtt_publish_packet_t *pkts, size_t num) {
-    for (size_t i = 0; i < num; ++i) {
-        mqtt_publish_packet_t *pkt = &pkts[i]; 
-        pkt->variable_header.property_len = 0;  
-    }
-}
-
-
-void repeat_publish_properties(mqtt_publish_packet_t *pkts, size_t num) {
-    for (size_t i = 0; i < num; ++i) {
-        mqtt_publish_packet_t *pkt = &pkts[i];
-        uint32_t len = pkt->variable_header.property_len;
-
-        // 只复制一次已有字段（简单复制前两个字节）
-        if (len + 2 < MAX_PROPERTIES_LEN && len >= 2) {
-            pkt->variable_header.properties[len]     = pkt->variable_header.properties[0];
-            pkt->variable_header.properties[len + 1] = pkt->variable_header.properties[1];
-            pkt->variable_header.property_len += 2;
-        }
-    }
-}
-
-void mutate_publish_properties(mqtt_publish_packet_t *pkts, size_t num) {
-    for (size_t i = 0; i < num; ++i) {
-        mqtt_publish_packet_t *pkt = &pkts[i];
-        uint8_t *props = pkt->variable_header.properties;
-        uint32_t *len = &pkt->variable_header.property_len;
-        int weights[10] = {40, 5, 40, 40, 5, 5, 5, 5, 40, 40}; 
-        int strategy = pick_weighted(weights, 10);
+        /* 随机选择一种最小合法集合 */
+        int strategy = rand() % 5;
         switch (strategy) {
-            case 0: // 清空
-                *len = 0;
+            case 0: { /* PFI=1 */
+                if (!pp_ensure(pos, 2, MAX_PROPERTIES_LEN)) break;
+                buf[pos++] = 0x01;        /* PFI */
+                buf[pos++] = 0x01;        /* 值=1，UTF-8 文本 */
                 break;
-            case 1: // 设置非法属性 ID
-                props[0] = 0xFF;
-                props[1] = 0x00;
-                *len = 2;
+            }
+            case 1: { /* Message Expiry Interval (0..3600) */
+                if (!pp_ensure(pos, 1+4, MAX_PROPERTIES_LEN)) break;
+                buf[pos++] = 0x02;
+                pp_put32(buf+pos, (uint32_t)(rand()%3601)); pos += 4;
                 break;
-            case 2: // 填入最大长度属性
-                memset(props, 0x01, MAX_PROPERTIES_LEN);
-                *len = MAX_PROPERTIES_LEN;
+            }
+            case 2: { /* Content Type = text/plain */
+                const char *ct = "text/plain";
+                uint16_t n = (uint16_t)strlen(ct);
+                if (!pp_ensure(pos, 1+2+n, MAX_PROPERTIES_LEN)) break;
+                buf[pos++] = 0x03;
+                pp_put16(buf+pos, n); pos += 2;
+                memcpy(buf+pos, ct, n); pos += n;
                 break;
-            case 3: // 添加多个合法属性
-                props[0] = 0x01; props[1] = 0x01; // Payload Format Indicator
-                props[2] = 0x23; props[3] = 0x00; props[4] = 0x00; props[5] = 0x00; props[6] = 0x64; // Message Expiry
-                *len = 7;
+            }
+            case 3: { /* Topic Alias = 1..100 */
+                if (!pp_ensure(pos, 1+2, MAX_PROPERTIES_LEN)) break;
+                buf[pos++] = 0x23;
+                pp_put16(buf+pos, (uint16_t)(1 + rand()%100)); pos += 2;
                 break;
-            case 4: // 非法长度（声明比实际短）
-                *len = 1;
-                props[0] = 0x01;
+            }
+            case 4: { /* 一条 User Property: key=key, value=value */
+                const char *k="key", *v="value";
+                uint16_t klen=(uint16_t)strlen(k), vlen=(uint16_t)strlen(v);
+                if (!pp_ensure(pos, 1+2+klen+2+vlen, MAX_PROPERTIES_LEN)) break;
+                buf[pos++] = 0x26;
+                pp_put16(buf+pos, klen); pos += 2; memcpy(buf+pos, k, klen); pos += klen;
+                pp_put16(buf+pos, vlen); pos += 2; memcpy(buf+pos, v, vlen); pos += vlen;
                 break;
-            case 5: // 非法长度（声明比实际长）
-                *len = 5;
-                props[0] = 0x01; props[1] = 0x01;
-                break;
-            case 6: // 填充乱码
-                for (int j = 0; j < 10; j++) props[j] = rand() % 256;
-                *len = 10;
-                break;
-            case 7: // 添加非法重复属性（例如两个 Payload Format）
-                props[0] = 0x01; props[1] = 0x00;
-                props[2] = 0x01; props[3] = 0x01;
-                *len = 4;
-                break;
-            case 8: // 添加合法 user property (ID 0x26, UTF8-pair)
-                props[0] = 0x26;
-                props[1] = 0x00; props[2] = 0x03; props[3] = 'k'; props[4] = 'e'; props[5] = 'y';
-                props[6] = 0x00; props[7] = 0x05; props[8] = 'v'; props[9] = 'a'; props[10] = 'l'; props[11] = 'u'; props[12] = 'e';
-                *len = 13;
-                break;
-            case 9: // 前缀注入
-                if (*len + 2 > MAX_PROPERTIES_LEN) {
-                  continue;
-                }
-                memmove(props + 2, props, *len);
-                props[0] = 0x02; props[1] = 0x02;  // Content Type = 0x02
-                *len += 2;
-                break;
+            }
         }
+
+        pkt->variable_header.property_len = pos; /* 可能为 0（空间不足时），也合法 */
+    }
+}
+
+/* ===== delete_publish_properties: 清空并可选清零缓冲区 ===== */
+void delete_publish_properties(mqtt_publish_packet_t *pkts, size_t num) {
+    if (!pkts) return;
+    for (size_t i = 0; i < num; ++i) {
+        mqtt_publish_packet_t *pkt = &pkts[i];
+        pkt->variable_header.property_len = 0;
+        memset(pkt->variable_header.properties, 0, MAX_PROPERTIES_LEN);
+    }
+}
+
+/* ===== repeat_publish_properties: 只重复一条 User Property（可重复的属性） ===== */
+void repeat_publish_properties(mqtt_publish_packet_t *pkts, size_t num) {
+    if (!pkts) return;
+
+    for (size_t i = 0; i < num; ++i) {
+        mqtt_publish_packet_t *pkt = &pkts[i];
+        uint8_t *p = pkt->variable_header.properties;
+        uint32_t plen = pkt->variable_header.property_len;
+
+        /* 找到第一条可完整解析的 User Property */
+        uint32_t up_pos = 0, up_len = 0;
+        for (uint32_t j = 0; j < plen; ) {
+            uint8_t id = p[j];
+            if (id == 0x26) {
+                uint32_t L = peek_publish_user_property_len(p, plen, j);
+                if (L == 0) break;
+                up_pos = j; up_len = L; break;
+            }
+            /* 跳过非 UP 的属性（按照类型长度跳） */
+            if (id == 0x01) {                 /* PFI: 1B */
+                if (j + 2 > plen) break; j += 2;
+            } else if (id == 0x02) {          /* MEI: 4B */
+                if (j + 1 + 4 > plen) break; j += 1 + 4;
+            } else if (id == 0x03) {          /* CT: UTF-8 */
+                if (j + 1 + 2 > plen) break;
+                uint16_t n = (uint16_t)((p[j+1] << 8) | p[j+2]);
+                if (j + 1 + 2 + n > plen) break;
+                j += 1 + 2 + n;
+            } else if (id == 0x08) {          /* RT: UTF-8 */
+                if (j + 1 + 2 > plen) break;
+                uint16_t n = (uint16_t)((p[j+1] << 8) | p[j+2]);
+                if (j + 1 + 2 + n > plen) break;
+                j += 1 + 2 + n;
+            } else if (id == 0x09) {          /* CD: Binary */
+                if (j + 1 + 2 > plen) break;
+                uint16_t n = (uint16_t)((p[j+1] << 8) | p[j+2]);
+                if (j + 1 + 2 + n > plen) break;
+                j += 1 + 2 + n;
+            } else if (id == 0x23) {          /* Topic Alias: 2B */
+                if (j + 1 + 2 > plen) break; j += 1 + 2;
+            } else {
+                /* 未知/异常，停止保护 */
+                up_len = 0; break;
+            }
+        }
+
+        if (up_len == 0) continue;                 /* 没有可重复的 UP */
+        if (!pp_ensure(plen, up_len, MAX_PROPERTIES_LEN)) continue;
+
+        memcpy(p + plen, p + up_pos, up_len);
+        pkt->variable_header.property_len = plen + up_len;
+    }
+}
+
+/* ===== mutate_publish_properties: 重建为一组“合法组合”的属性 ===== */
+void mutate_publish_properties(mqtt_publish_packet_t *pkts, size_t num) {
+    if (!pkts) return;
+
+    for (size_t i = 0; i < num; ++i) {
+        mqtt_publish_packet_t *pkt = &pkts[i];
+        uint8_t *buf = pkt->variable_header.properties;
+        uint32_t pos = 0;
+
+        /* 标记只出现一次的属性是否已写入 */
+        int used_pfi=0, used_mei=0, used_ct=0, used_rt=0, used_cd=0, used_ta=0;
+
+        /* 选择几种合法策略，全部“重建”属性区 */
+        int strategy = rand() % 6;
+
+        /* 工具宏 */
+        #define ENSURE(n) do { if (!pp_ensure(pos, (n), MAX_PROPERTIES_LEN)) goto done; } while (0)
+        #define PUT8(v)   do { ENSURE(1); buf[pos++] = (uint8_t)(v); } while (0)
+        #define PUT16(v)  do { ENSURE(2); pp_put16(buf+pos, (uint16_t)(v)); pos += 2; } while (0)
+        #define PUT32(v)  do { ENSURE(4); pp_put32(buf+pos, (uint32_t)(v)); pos += 4; } while (0)
+        #define PUT_UTF8(s) do { \
+            const char *S__ = (s); uint16_t N__ = (uint16_t)(S__ ? strlen(S__) : 0); \
+            ENSURE(1+2+N__); buf[pos++] = cur_id; PUT16(N__); if (N__) { memcpy(buf+pos, S__, N__); pos += N__; } \
+        } while (0)
+        #define PUT_BIN(ptr,len) do { \
+            uint16_t L__ = (uint16_t)(len); ENSURE(1+2+L__); buf[pos++] = 0x09; PUT16(L__); memcpy(buf+pos, (ptr), L__); pos += L__; \
+        } while (0)
+
+        switch (strategy) {
+            case 0: /* 清空（合法） */
+                break;
+
+            case 1: /* PFI=1 + 可选 CT */
+            {
+                if (!used_pfi) { PUT8(0x01); PUT8(1); used_pfi=1; }
+                if ((rand()%2) && !used_ct) {
+                    uint8_t cur_id = 0x03; (void)cur_id;
+                    PUT_UTF8("text/plain"); used_ct=1;
+                }
+                break;
+            }
+
+            case 2: /* Message Expiry + 可选 PFI */
+            {
+                if (!used_mei) { PUT8(0x02); PUT32((uint32_t)(rand()%7200)); used_mei=1; }
+                if ((rand()%2) && !used_pfi) { PUT8(0x01); PUT8(rand()%2); used_pfi=1; }
+                break;
+            }
+
+            case 3: /* Topic Alias（1..100）+ 可选 Response Topic */
+            {
+                if (!used_ta) { PUT8(0x23); PUT16((uint16_t)(1 + rand()%100)); used_ta=1; }
+                if ((rand()%2) && !used_rt) {
+                    uint8_t cur_id = 0x08; (void)cur_id;
+                    PUT_UTF8("reply/topic"); used_rt=1;
+                }
+                break;
+            }
+
+            case 4: /* Correlation Data + Response Topic（常用于请求-响应） */
+            {
+                if (!used_rt) { uint8_t cur_id = 0x08; (void)cur_id; PUT_UTF8("reply/topic"); used_rt=1; }
+                if (!used_cd) {
+                    uint8_t tmp[24]; int L = 8 + rand()%17;
+                    for (int k=0;k<L;k++) tmp[k]=(uint8_t)rand();
+                    PUT_BIN(tmp, L); used_cd=1;
+                }
+                break;
+            }
+
+            case 5: /* 混合：随机挑若干“仅一次”属性 + 0..3 个 User Property */
+            {
+                if (!used_pfi && (rand()%2)) { PUT8(0x01); PUT8(rand()%2); used_pfi=1; }
+                if (!used_mei && (rand()%2)) { PUT8(0x02); PUT32((uint32_t)(rand()%7200)); used_mei=1; }
+                if (!used_ct  && (rand()%2)) { uint8_t cur_id=0x03; (void)cur_id; PUT_UTF8("application/json"); used_ct=1; }
+                if (!used_rt  && (rand()%2)) { uint8_t cur_id=0x08; (void)cur_id; PUT_UTF8("resp/alpha"); used_rt=1; }
+                if (!used_cd  && (rand()%2)) {
+                    uint8_t tmp[16]; int L = 6 + rand()%9;
+                    for (int k=0;k<L;k++) tmp[k]=(uint8_t)rand();
+                    PUT_BIN(tmp, L); used_cd=1;
+                }
+                if (!used_ta  && (rand()%2)) { PUT8(0x23); PUT16((uint16_t)(1 + rand()%100)); used_ta=1; }
+
+                /* 0..3 个 User Property */
+                int upn = rand()%4;
+                for (int t=0; t<upn; ++t) {
+                    const char *k = (t%2)? "source":"note";
+                    const char *v = (t%2)? "edge":"ok";
+                    uint16_t klen=(uint16_t)strlen(k), vlen=(uint16_t)strlen(v);
+                    ENSURE(1+2+klen+2+vlen);
+                    buf[pos++] = 0x26;
+                    pp_put16(buf+pos, klen); pos += 2; memcpy(buf+pos, k, klen); pos += klen;
+                    pp_put16(buf+pos, vlen); pos += 2; memcpy(buf+pos, v, vlen); pos += vlen;
+                }
+                break;
+            }
+        }
+
+    done:
+        pkt->variable_header.property_len = pos;
+
+        #undef ENSURE
+        #undef PUT8
+        #undef PUT16
+        #undef PUT32
+        #undef PUT_UTF8
+        #undef PUT_BIN
     }
 }
 
@@ -1675,7 +2127,7 @@ void mutate_publish_payload(mqtt_publish_packet_t *pkts, size_t num) {
         mqtt_publish_packet_t *pkt = &pkts[i];
         uint8_t *p = pkt->payload.payload;
         uint32_t *len = &pkt->payload.payload_len;
-        int weights[10] = {40, 40, 10, 10, 5, 10, 5, 5, 40, 40}; 
+        int weights[10] = {40, 40, 0, 0, 0, 0, 0, 0, 0, 0}; 
         int strategy = pick_weighted(weights, 10);
         switch (strategy) {
             case 0: // 清空
@@ -1724,7 +2176,7 @@ void mutate_publish_qos(mqtt_publish_packet_t *pkts, size_t num) {
     for (size_t i = 0; i < num; ++i) {
         mqtt_publish_packet_t *pkt = &pkts[i];
         uint8_t *qos = &pkt->qos;
-        int weights[10] = {40, 40, 40, 5, 5, 10, 10, 10, 10, 5}; 
+        int weights[10] = {40, 40, 40, 0, 0, 0, 0, 0, 0, 0}; 
         int strategy = pick_weighted(weights, 10);
         switch (strategy) {
             case 0: *qos = 0; break;               // 合法值
@@ -1746,7 +2198,7 @@ void mutate_publish_dup(mqtt_publish_packet_t *pkts, size_t num) {
     for (size_t i = 0; i < num; ++i) {
         mqtt_publish_packet_t *pkt = &pkts[i];
         uint8_t *dup = &pkt->dup;
-        int weights[10] = {40, 40, 40, 10, 5, 5, 10, 10, 5, 10}; 
+        int weights[10] = {40, 40, 40, 0, 0, 0, 0, 0, 0, 0}; 
         int strategy = pick_weighted(weights, 10);
         switch (strategy) {
             case 0: *dup = 0; break;                 // 合法值: 0 = 非重复
@@ -1767,7 +2219,7 @@ void mutate_publish_retain(mqtt_publish_packet_t *pkts, size_t num) {
     for (size_t i = 0; i < num; ++i) {
         mqtt_publish_packet_t *pkt = &pkts[i];
         uint8_t *retain = &pkt->retain;
-        int weights[10] = {40, 40, 10, 5, 5, 10, 5, 5, 10, 10}; 
+        int weights[10] = {40, 40, 0, 0, 0, 0, 0, 0, 0, 0}; 
         int strategy = pick_weighted(weights, 10);
         switch (strategy) {
             case 0: *retain = 0; break;                 // 合法值：清除 retain
@@ -1790,7 +2242,7 @@ void mutate_unsubscribe_packet_identifier(mqtt_unsubscribe_packet_t *pkts, int n
     for (int i = 0; i < num; ++i) {
         mqtt_unsubscribe_packet_t *pkt = &pkts[i];
         uint16_t *id = &pkt->variable_header.packet_identifier;
-        int weights[10] = {40, 40, 5, 10, 10, 40, 40, 40, 5, 5}; 
+        int weights[10] = {40, 40, 0, 0, 0, 0, 40, 40, 0, 0}; 
         int strategy = pick_weighted(weights, 10);
         switch (strategy) {
             case 0: *id = 0x0001; break;                          // 最小合法值
@@ -1808,23 +2260,57 @@ void mutate_unsubscribe_packet_identifier(mqtt_unsubscribe_packet_t *pkts, int n
 
     }
 }
+/* ===== Helpers for UNSUBSCRIBE properties (User Property only) ===== */
+static inline int uprop_ensure(uint32_t pos, uint32_t need) {
+    return pos + need <= (uint32_t)MAX_PROPERTIES_LEN;
+}
+static inline void uprop_put16(uint8_t *p, uint16_t v) {
+    p[0] = (uint8_t)((v >> 8) & 0xFF);
+    p[1] = (uint8_t)(v & 0xFF);
+}
+/* 计算从 props[pos] 开始的一条 User Property 的总长度；不完整/非法返回 0 */
+static uint32_t peek_unsub_user_property_len(const uint8_t *props, uint32_t plen, uint32_t pos) {
+    if (pos >= plen || props[pos] != 0x26) return 0;
+    uint32_t r = pos + 1;
+    if (r + 2 > plen) return 0;
+    uint16_t klen = (uint16_t)((props[r] << 8) | props[r+1]); r += 2;
+    if (r + klen + 2 > plen) return 0;
+    r += klen;
+    uint16_t vlen = (uint16_t)((props[r] << 8) | props[r+1]); r += 2;
+    if (r + vlen > plen) return 0;
+    r += vlen;
+    return r - pos; /* 总长度（字节） */
+}
 
-// 增加properties字段（添加一个伪随机属性）
+/* 增加 properties 字段（添加一条合法 User Property） */
 void add_unsubscribe_properties(mqtt_unsubscribe_packet_t *pkts, int num) {
+    static const char *def_key = "key";
+    static const char *def_val = "value";
+
     for (int i = 0; i < num; ++i) {
-        mqtt_unsubscribe_packet_t pkt = pkts[i];
-        if (pkt.variable_header.property_len == 0) {
-            pkt.variable_header.properties[0] = 0x26;  // User Property 标识符
-            pkt.variable_header.properties[1] = 0x00; pkt.variable_header.properties[2] = 0x03;  // key 长度 = 3
-            memcpy(&pkt.variable_header.properties[3], "key", 3);
-            pkt.variable_header.properties[6] = 0x00; pkt.variable_header.properties[7] = 0x05;  // value 长度 = 5
-            memcpy(&pkt.variable_header.properties[8], "value", 5);
-            pkt.variable_header.property_len = 13;
+        mqtt_unsubscribe_packet_t *pkt = &pkts[i];  /* 注意：使用指针，直接修改原对象 */
+
+        if (pkt->variable_header.property_len != 0) continue;   /* 已有属性则跳过 */
+
+        uint8_t *p = pkt->variable_header.properties;
+        uint32_t pos = 0;
+        uint16_t klen = (uint16_t)strlen(def_key);
+        uint16_t vlen = (uint16_t)strlen(def_val);
+
+        if (!uprop_ensure(pos, 1 + 2 + klen + 2 + vlen)) {
+            pkt->variable_header.property_len = 0;  /* 空属性也合法 */
+            continue;
         }
+
+        p[pos++] = 0x26;                               /* User Property */
+        uprop_put16(p + pos, klen); pos += 2; memcpy(p + pos, def_key, klen); pos += klen;
+        uprop_put16(p + pos, vlen); pos += 2; memcpy(p + pos, def_val, vlen); pos += vlen;
+
+        pkt->variable_header.property_len = pos;
     }
 }
 
-// 删除properties字段
+/* 删除 properties 字段（清空即可） */
 void delete_unsubscribe_properties(mqtt_unsubscribe_packet_t *pkts, int num) {
     for (int i = 0; i < num; ++i) {
         pkts[i].variable_header.property_len = 0;
@@ -1832,75 +2318,72 @@ void delete_unsubscribe_properties(mqtt_unsubscribe_packet_t *pkts, int num) {
     }
 }
 
+/* 复制一条已存在的 User Property 并追加（仅当解析到完整 UP 时进行） */
 void repeat_unsubscribe_properties(mqtt_unsubscribe_packet_t *pkts, int num) {
     for (int i = 0; i < num; ++i) {
         mqtt_unsubscribe_packet_t *pkt = &pkts[i];
-        // 插入两个相同 User Property
-        uint8_t entry[] = {
-            0x26, 0x00, 0x03, 'k', 'e', 'y',
-            0x00, 0x05, 'v', 'a', 'l', 'u', 'e'
-        };
+        uint8_t *p = pkt->variable_header.properties;
+        uint32_t plen = pkt->variable_header.property_len;
 
-        if (sizeof(entry) * 2 < MAX_PROPERTIES_LEN) {
-            memcpy(pkt->variable_header.properties, entry, sizeof(entry));
-            memcpy(pkt->variable_header.properties + sizeof(entry), entry, sizeof(entry));
-            pkt->variable_header.property_len = sizeof(entry) * 2;
+        /* 找第一条完整的 User Property */
+        uint32_t up_pos = 0, up_len = 0;
+        for (uint32_t j = 0; j < plen; ) {
+            if (p[j] == 0x26) {
+                uint32_t L = peek_unsub_user_property_len(p, plen, j);
+                if (L == 0) break;          /* 结构异常则不处理 */
+                up_pos = j; up_len = L;
+                break;
+            } else {
+                /* UNSUBSCRIBE 不允许其他属性，遇到未知字节则放弃重复 */
+                up_len = 0; break;
+            }
         }
+        if (up_len == 0) continue;
+        if (!uprop_ensure(plen, up_len)) continue;
+
+        memcpy(p + plen, p + up_pos, up_len);
+        pkt->variable_header.property_len = plen + up_len;
     }
 }
 
+/* 只做“合法变异”：重建为 0..N 条合法 User Property（不写入其他 ID） */
 void mutate_unsubscribe_properties(mqtt_unsubscribe_packet_t *pkts, int num) {
+    static const char *keys[] = {"source","priority","note","device","region"};
+    static const char *vals[] = {"sensor1","high","ok","edge","cn-north"};
+
     for (int i = 0; i < num; ++i) {
         mqtt_unsubscribe_packet_t *pkt = &pkts[i];
-        uint8_t *props = pkt->variable_header.properties;
-        uint32_t *len = &pkt->variable_header.property_len;
-        int weights[10] = {40, 10, 10, 10, 5, 5, 40, 5, 10, 5}; 
-        int strategy = pick_weighted(weights, 10);
+        uint8_t *p = pkt->variable_header.properties;
+        uint32_t pos = 0;
+
+        /* 选择合法策略：0=清空，1=写1条，2=写2条，3=写3条（全部合法 UP） */
+        int strategy = rand() % 4;
+        int count = 0;
         switch (strategy) {
-            case 0:  // 清空属性
-                *len = 0;
-                memset(props, 0, MAX_PROPERTIES_LEN);
-                break;
-            case 1:  // 插入随机属性字节
-                *len = rand() % 20 + 1;
-                for (uint32_t j = 0; j < *len; ++j)
-                    props[j] = rand() % 256;
-                break;
-            case 2:  // 插入最大长度属性
-                *len = MAX_PROPERTIES_LEN;
-                memset(props, 0x41, MAX_PROPERTIES_LEN);  // 全'A'
-                break;
-            case 3:  // 插入重复 user property
-                repeat_unsubscribe_properties(&pkts[i], 1);
-                break;
-            case 4:  // 插入非法属性标识符
-                props[0] = 0xFF;  // 未定义
-                *len = 1;
-                break;
-            case 5:  // 修改 length，但不写入属性内容
-                *len = 10;
-                break;
-            case 6:  // 写入合法 user property
-                add_unsubscribe_properties(&pkts[i], 1);
-                break;
-            case 7:  // 写入乱码属性内容
-                *len = 8;
-                for (int j = 0; j < 8; ++j)
-                    props[j] = 0x80 + rand() % 128;  // 非 UTF-8 编码字符
-                break;
-            case 8:  // 增加随机填充在尾部
-                if (*len + 4 < MAX_PROPERTIES_LEN) {
-                    memset(props + *len, 0xCC, 4);
-                    *len += 4;
-                }
-                break;
-            case 9:  // 整个字段溢出写入
-                *len = MAX_PROPERTIES_LEN + 10;
-                memset(props, 0xFF, MAX_PROPERTIES_LEN);  // 实际数据长度仍安全
-                break;
+            case 0: count = 0; break;
+            case 1: count = 1; break;
+            case 2: count = 2; break;
+            case 3: count = 3; break;
         }
+
+        for (int t = 0; t < count; ++t) {
+            const char *k = keys[rand() % (int)(sizeof(keys)/sizeof(keys[0]))];
+            const char *v = vals[rand() % (int)(sizeof(vals)/sizeof(vals[0]))];
+            uint16_t klen = (uint16_t)strlen(k);
+            uint16_t vlen = (uint16_t)strlen(v);
+
+            uint32_t need = 1 + 2 + klen + 2 + vlen;
+            if (!uprop_ensure(pos, need)) break;
+
+            p[pos++] = 0x26;
+            uprop_put16(p + pos, klen); pos += 2; memcpy(p + pos, k, klen); pos += klen;
+            uprop_put16(p + pos, vlen); pos += 2; memcpy(p + pos, v, vlen); pos += vlen;
+        }
+
+        pkt->variable_header.property_len = pos;  /* 字节长度（合法） */
     }
 }
+
 
 void repeat_unsubscribe_topic_filters(mqtt_unsubscribe_packet_t *pkts, int num) {
     for (int i = 0; i < num; ++i) {
@@ -1918,7 +2401,7 @@ void mutate_unsubscribe_topic_filters(mqtt_unsubscribe_packet_t *pkts, int num) 
     for (int i = 0; i < num; ++i) {
         mqtt_unsubscribe_packet_t *pkt = &pkts[i];
         uint8_t count = pkt->payload.topic_count;
-        int weights[10] = {5, 5, 5, 5, 40, 10, 5, 5, 5, 5}; 
+        int weights[10] = {0, 0, 0, 0, 40, 0, 0, 0, 0, 0}; 
         int strategy = pick_weighted(weights, 10);
         switch (strategy) {
             case 0:  // 清空所有 topic filter（非法）
@@ -2011,7 +2494,7 @@ void mutate_auth_reason_code(mqtt_auth_packet_t *pkts, int num) {
         if (pkt->fixed_header.remaining_length < 1) continue;
 
         uint8_t *rc = &pkt->variable_header.reason_code;
-        int weights[10] = {40, 40, 40, 5, 10, 5, 10, 10, 40, 10}; 
+        int weights[10] = { 50, 50, 50, 0, 0, 0, 0, 0, 0, 0}; 
         int strategy = pick_weighted(weights, 10);
         switch (strategy) {
             case 0: *rc = 0x00; break;                  // 合法值：Success
@@ -2028,75 +2511,237 @@ void mutate_auth_reason_code(mqtt_auth_packet_t *pkts, int num) {
     }
 }
 
+/* ===== Helpers ===== */
+static inline int a_ensure(uint32_t pos, uint32_t need) {
+    return pos + need <= (uint32_t)MAX_PROPERTIES_LEN;
+}
+static inline void a_put16(uint8_t *p, uint16_t v) {
+    p[0] = (uint8_t)((v >> 8) & 0xFF);
+    p[1] = (uint8_t)(v & 0xFF);
+}
+static inline void a_put32(uint8_t *p, uint32_t v) {
+    p[0] = (uint8_t)((v >> 24) & 0xFF);
+    p[1] = (uint8_t)((v >> 16) & 0xFF);
+    p[2] = (uint8_t)((v >> 8) & 0xFF);
+    p[3] = (uint8_t)(v & 0xFF);
+}
+/* MQTT VarInt 字节数 */
+static inline uint32_t varint_size(uint32_t v) {
+    if (v < 128u) return 1;
+    if (v < 16384u) return 2;
+    if (v < 2097152u) return 3;
+    return 4;
+}
+/* 重新计算 AUTH 剩余长度：1 (reason_code) + varint(prop_len) + prop_len */
+static inline void auth_recalc_remaining_length(mqtt_auth_packet_t *pkt) {
+    uint32_t L = pkt->variable_header.property_len;
+    pkt->fixed_header.remaining_length = 1u + varint_size(L) + L;
+}
+
+/* ===== add_auth_properties：若为空则追加一组最小且合法的属性 ===== */
 void add_auth_properties(mqtt_auth_packet_t *pkts, int num) {
     for (int i = 0; i < num; i++) {
         mqtt_auth_packet_t *pkt = &pkts[i];
-
-        if (pkt->variable_header.property_len == 0) {
-            pkt->variable_header.properties[0] = 0x15;  // Authentication Method identifier
-            pkt->variable_header.properties[1] = 0x00;  // Empty string length MSB
-            pkt->variable_header.properties[2] = 0x00;  // Empty string length LSB
-            pkt->variable_header.property_len = 3;
-
-            pkt->fixed_header.remaining_length += 3;
+        if (pkt->variable_header.property_len != 0) { 
+            auth_recalc_remaining_length(pkt);
+            continue;
         }
+
+        uint8_t *p = pkt->variable_header.properties;
+        uint32_t pos = 0;
+
+        /* 选择一个最小合规集合：默认写入 Authentication Method="PLAIN" */
+        const char *method = "PLAIN";
+        uint16_t mlen = (uint16_t)strlen(method);
+
+        if (!a_ensure(pos, 1 + 2 + mlen)) { /* 0x15 + len + data */
+            pkt->variable_header.property_len = 0;
+            auth_recalc_remaining_length(pkt);
+            continue;
+        }
+
+        p[pos++] = 0x15;                     /* Authentication Method */
+        a_put16(p + pos, mlen); pos += 2;
+        memcpy(p + pos, method, mlen); pos += mlen;
+
+        pkt->variable_header.property_len = pos;
+        auth_recalc_remaining_length(pkt);
     }
 }
 
-
+/* ===== repeat_auth_properties：仅复制一条完整的 User Property (0x26) ===== */
 void repeat_auth_properties(mqtt_auth_packet_t *pkts, int num) {
     for (int i = 0; i < num; i++) {
         mqtt_auth_packet_t *pkt = &pkts[i];
+        uint8_t *p = pkt->variable_header.properties;
+        uint32_t plen = pkt->variable_header.property_len;
 
-        if (pkt->variable_header.property_len + 10 >= MAX_PROPERTIES_LEN) continue;
+        /* 解析并找到第一条完整的 User Property */
+        uint32_t up_pos = 0, up_len = 0;
+        for (uint32_t j = 0; j < plen; ) {
+            uint8_t id = p[j];
+            if (id == 0x26) { /* User Property */
+                if (j + 1 + 2 > plen) break;
+                uint32_t r = j + 1;
+                uint16_t klen = (uint16_t)((p[r] << 8) | p[r+1]); r += 2;
+                if (r + klen + 2 > plen) break;
+                r += klen;
+                uint16_t vlen = (uint16_t)((p[r] << 8) | p[r+1]); r += 2;
+                if (r + vlen > plen) break;
+                r += vlen;
+                up_pos = j; up_len = r - j;
+                break;
+            }
+            /* 跳过单次属性：0x15/0x16/0x1F */
+            else if (id == 0x15 || id == 0x1F) { /* UTF-8 */
+                if (j + 1 + 2 > plen) break;
+                uint16_t n = (uint16_t)((p[j+1] << 8) | p[j+2]);
+                if (j + 1 + 2 + n > plen) break;
+                j += 1 + 2 + n;
+            } else if (id == 0x16) { /* Binary */
+                if (j + 1 + 2 > plen) break;
+                uint16_t n = (uint16_t)((p[j+1] << 8) | p[j+2]);
+                if (j + 1 + 2 + n > plen) break;
+                j += 1 + 2 + n;
+            } else {
+                /* 未知/异常，停止保护 */
+                up_len = 0; break;
+            }
+        }
+        if (up_len == 0) { auth_recalc_remaining_length(pkt); continue; }
+        if (!a_ensure(plen, up_len)) { auth_recalc_remaining_length(pkt); continue; }
 
-        // User Property: Identifier 0x26, Key=“x”, Value=“y”
-        uint8_t *p = pkt->variable_header.properties + pkt->variable_header.property_len;
-        *p++ = 0x26;
-        *p++ = 0x00; *p++ = 0x01; *p++ = 'x';  // key
-        *p++ = 0x00; *p++ = 0x01; *p++ = 'y';  // value
-
-        pkt->variable_header.property_len += 7;
-        pkt->fixed_header.remaining_length += 7;
+        memcpy(p + plen, p + up_pos, up_len);
+        pkt->variable_header.property_len = plen + up_len;
+        auth_recalc_remaining_length(pkt);
     }
 }
 
+/* ===== mutate_auth_properties：重建为一组“合法组合”的属性 ===== */
 void mutate_auth_properties(mqtt_auth_packet_t *pkts, int num) {
+    static const char *methods[] = {"PLAIN", "SCRAM-SHA-256"};
+    static const char *reasons[] = {"ok", "continue", "reauth"};
+    static const char *keys[]    = {"source","priority","note","device"};
+    static const char *vals[]    = {"client","high","ok","edge"};
+
     for (int i = 0; i < num; i++) {
         mqtt_auth_packet_t *pkt = &pkts[i];
-        uint32_t *len = &pkt->variable_header.property_len;
-        uint8_t *p = pkt->variable_header.properties;
-        int weights[10] = {10, 40, 5, 5, 10, 40, 40, 5, 5, 5}; 
-        int strategy = pick_weighted(weights, 10);
+        uint8_t *p  = pkt->variable_header.properties;
+        uint32_t pos = 0;
+
+        /* 标识“仅允许出现一次”的属性是否已写 */
+        int used_method = 0, used_data = 0, used_reason = 0;
+
+        /* 选择一个合法策略重建属性区 */
+        int strategy = rand() % 6;
         switch (strategy) {
-            case 0: // 插入 Authentication Method 空字符串
-                p[0] = 0x15; p[1] = 0x00; p[2] = 0x00; *len = 3; break;
-            case 1: // 插入 Authentication Method "PLAIN"
-                p[0] = 0x15; p[1] = 0x00; p[2] = 0x05; memcpy(p+3, "PLAIN", 5); *len = 8; break;
-            case 2: // 插入 Authentication Data 空数据
-                p[0] = 0x16; p[1] = 0x00; p[2] = 0x00; *len = 3; break;
-            case 3: // 插入非法属性 ID（超出 MQTT 定义）
-                p[0] = 0xFF; p[1] = 0x00; p[2] = 0x00; *len = 3; break;
-            case 4: // 属性长度设为 MAX_PROPERTIES_LEN，填满随机
-                *len = MAX_PROPERTIES_LEN; for (int j = 0; j < MAX_PROPERTIES_LEN; j++) p[j] = rand() % 256; break;
-            case 5: // 插入 User Property (“x”,"y")
-                p[0] = 0x26; p[1] = 0x00; p[2] = 0x01; p[3] = 'x'; p[4] = 0x00; p[5] = 0x01; p[6] = 'y'; *len = 7; break;
-            case 6: // 插入多个合法字段（Method + Data）
-                p[0] = 0x15; p[1] = 0x00; p[2] = 0x02; p[3] = 'A'; p[4] = 'B';
-                p[5] = 0x16; p[6] = 0x00; p[7] = 0x03; p[8] = 1; p[9] = 2; p[10] = 3;
-                *len = 11; break;
-            case 7: // 超长长度字段（声明长度超出实际）
-                p[0] = 0x15; p[1] = 0xFF; p[2] = 0xFF; *len = 3; break;
-            case 8: // 空内容但声明长度 > 0
-                *len = 5; memset(p, 0, 5); break;
-            case 9: // 插入 UTF-8 不合法字符
-                p[0] = 0x15; p[1] = 0x00; p[2] = 0x01; p[3] = 0xFF; *len = 4; break;
+            case 0: /* 清空属性（合法） */
+                break;
+
+            case 1: /* 仅 Method */
+            {
+                const char *m = methods[rand() % 2];
+                uint16_t ml = (uint16_t)strlen(m);
+                if (a_ensure(pos, 1 + 2 + ml)) {
+                    p[pos++] = 0x15; a_put16(p + pos, ml); pos += 2; memcpy(p + pos, m, ml); pos += ml;
+                    used_method = 1;
+                }
+                break;
+            }
+
+            case 2: /* Method + Data */
+            {
+                const char *m = methods[rand() % 2];
+                uint16_t ml = (uint16_t)strlen(m);
+                uint16_t dl = (uint16_t)(8 + rand() % 9); /* 8..16 字节 */
+                if (a_ensure(pos, 1 + 2 + ml + 1 + 2 + dl)) {
+                    /* Method */
+                    p[pos++] = 0x15; a_put16(p + pos, ml); pos += 2; memcpy(p + pos, m, ml); pos += ml; used_method=1;
+                    /* Data */
+                    p[pos++] = 0x16; a_put16(p + pos, dl); pos += 2;
+                    for (uint16_t k = 0; k < dl; ++k) p[pos + k] = (uint8_t)rand();
+                    pos += dl; used_data=1;
+                }
+                break;
+            }
+
+            case 3: /* Reason String */
+            {
+                const char *rs = reasons[rand() % 3];
+                uint16_t rl = (uint16_t)strlen(rs);
+                if (a_ensure(pos, 1 + 2 + rl)) {
+                    p[pos++] = 0x1F; a_put16(p + pos, rl); pos += 2; memcpy(p + pos, rs, rl); pos += rl;
+                    used_reason = 1;
+                }
+                break;
+            }
+
+            case 4: /* 若干 User Property（1..3） */
+            {
+                int upn = 1 + rand() % 3;
+                for (int t = 0; t < upn; ++t) {
+                    const char *k = keys[rand() % 4];
+                    const char *v = vals[rand() % 4];
+                    uint16_t kl = (uint16_t)strlen(k), vl = (uint16_t)strlen(v);
+                    if (!a_ensure(pos, 1 + 2 + kl + 2 + vl)) break;
+                    p[pos++] = 0x26;
+                    a_put16(p + pos, kl); pos += 2; memcpy(p + pos, k, kl); pos += kl;
+                    a_put16(p + pos, vl); pos += 2; memcpy(p + pos, v, vl); pos += vl;
+                }
+                break;
+            }
+
+            case 5: /* 混合：Method (+Data) + 0..2 个 User Property + 可选 Reason String */
+            {
+                /* Method */
+                if (!used_method) {
+                    const char *m = methods[rand() % 2];
+                    uint16_t ml = (uint16_t)strlen(m);
+                    if (a_ensure(pos, 1 + 2 + ml)) {
+                        p[pos++] = 0x15; a_put16(p + pos, ml); pos += 2; memcpy(p + pos, m, ml); pos += ml;
+                        used_method = 1;
+                    }
+                }
+                /* 可选 Data（仅当 Method 已写入） */
+                if (used_method && (rand() % 2) && !used_data) {
+                    uint16_t dl = (uint16_t)(6 + rand() % 11); /* 6..16 */
+                    if (a_ensure(pos, 1 + 2 + dl)) {
+                        p[pos++] = 0x16; a_put16(p + pos, dl); pos += 2;
+                        for (uint16_t k = 0; k < dl; ++k) p[pos + k] = (uint8_t)rand();
+                        pos += dl; used_data = 1;
+                    }
+                }
+                /* 0..2 个 User Property */
+                {
+                    int upn = rand() % 3;
+                    for (int t = 0; t < upn; ++t) {
+                        const char *k = keys[rand() % 4];
+                        const char *v = vals[rand() % 4];
+                        uint16_t kl = (uint16_t)strlen(k), vl = (uint16_t)strlen(v);
+                        if (!a_ensure(pos, 1 + 2 + kl + 2 + vl)) break;
+                        p[pos++] = 0x26;
+                        a_put16(p + pos, kl); pos += 2; memcpy(p + pos, k, kl); pos += kl;
+                        a_put16(p + pos, vl); pos += 2; memcpy(p + pos, v, vl); pos += vl;
+                    }
+                }
+                /* 可选 Reason String（若未写过） */
+                if (!used_reason && (rand() % 2)) {
+                    const char *rs = "ok";
+                    uint16_t rl = (uint16_t)strlen(rs);
+                    if (a_ensure(pos, 1 + 2 + rl)) {
+                        p[pos++] = 0x1F; a_put16(p + pos, rl); pos += 2; memcpy(p + pos, rs, rl); pos += rl;
+                        used_reason = 1;
+                    }
+                }
+                break;
+            }
         }
 
-        // 更新 fixed_header 长度
-        pkt->fixed_header.remaining_length = 1 + *len;  // +1 for reason_code
+        pkt->variable_header.property_len = pos;
+        auth_recalc_remaining_length(pkt);
     }
 }
+
 
 
 // mutator 函数指针类型
@@ -2144,6 +2789,32 @@ connect_mutator_fn connect_mutators[] = {
     delete_connect_password,
     // delete_password_len
 };
+static int connect_mutators_weights[] = {
+    8, // mutate_connect_flags
+    8, // mutate_connect_keep_alive
+    0, // mutate_connect_properties            <-- 禁用
+    6, // mutate_connect_client_id
+    6, // mutate_connect_will_properties
+    6, // mutate_connect_will_topic
+    6, // mutate_connect_will_payload
+    6, // mutate_connect_user_name
+    6, // mutate_connect_password
+    0, // add_connect_properties               <-- 禁用
+    8, // add_connect_client_id
+    0, // add_connect_will_properties          <-- 禁用
+    0, // add_connect_will_topic               <-- 禁用
+    8, // add_connect_will_payload
+    8, // add_connect_user_name
+    8, // add_connect_password
+    8, // delete_connect_properties
+    0, // delete_connect_client_id             <-- 禁用（或修函数后再放开）
+    0, // delete_connect_will_properties
+    0, // delete_connect_will_topic
+    0, // delete_connect_will_payload
+    8, // delete_connect_user_name
+    8, // delete_connect_password
+};
+
 // subscribe mutator 列表 9
 subscribe_mutator_fn subscribe_mutators[] = {
     mutate_subscribe_packet_identifier,
@@ -2155,6 +2826,17 @@ subscribe_mutator_fn subscribe_mutators[] = {
     repeat_subscribe_topic_filter,
     mutate_subscribe_qos,
     mutate_subscribe_topic_count
+};
+static int subscribe_mutators_weights[] = {
+    8, // mutate_subscribe_packet_identifier
+    6, // mutate_subscribe_properties
+    8, // add_subscribe_properties
+    8, // delete_subscribe_properties
+    6, // repeat_subscribe_properties
+    6, // mutate_subscribe_topic_filter
+    6, // repeat_subscribe_topic_filter
+    8, // mutate_subscribe_qos
+    8, // mutate_subscribe_topic_count
 };
 // publish mutator 列表 15
 publish_mutator_fn publish_mutators[] = {
@@ -2176,6 +2858,24 @@ publish_mutator_fn publish_mutators[] = {
     mutate_publish_retain
     
 };
+static int publish_mutators_weights[] = {
+    0, // mutate_publish_packet_identifier
+    8, // add_publish_packet_identifier
+    0, // delete_publish_packet_identifier
+    6, // mutate_publish_topic_name
+    8, // add_publish_topic_name
+    0, // delete_publish_topic_name
+    6, // mutate_publish_properties
+    8, // add_publish_properties
+    8, // delete_publish_properties
+    0, // repeat_publish_properties
+    6, // mutate_publish_payload
+    8, // add_publish_payload
+    8, // delete_publish_payload
+    8, // mutate_publish_qos
+    8, // mutate_publish_dup
+    8, // mutate_publish_retain
+};
 // unsubscribe mutator 列表 7
 unsubscribe_mutator_fn unsubscribe_mutators[] = {
     mutate_unsubscribe_packet_identifier,
@@ -2185,6 +2885,15 @@ unsubscribe_mutator_fn unsubscribe_mutators[] = {
     repeat_unsubscribe_properties,
     mutate_unsubscribe_topic_filters,
     repeat_unsubscribe_topic_filters
+};
+static int unsubscribe_mutators_weights[] = {
+    6, // mutate_unsubscribe_packet_identifier
+    8, // add_unsubscribe_properties
+    8, // delete_unsubscribe_properties
+    6, // mutate_unsubscribe_properties
+    6, // repeat_unsubscribe_properties
+    6, // mutate_unsubscribe_topic_filters
+    6, // repeat_unsubscribe_topic_filters
 };
 // auth mutator 列表 6
 auth_mutator_fn auth_mutators[] = {
@@ -2196,6 +2905,14 @@ auth_mutator_fn auth_mutators[] = {
     // delete_auth_properties,
     repeat_auth_properties
 };
+static int auth_mutators_weights[] = {
+    6, // mutate_auth_reason_code
+    8, // add_auth_reason_code
+    8, // delete_auth_reason_code
+    6, // mutate_auth_properties
+    8, // add_auth_properties
+    6, // repeat_auth_properties
+};
 
 #define CONNECT_MUTATOR_COUNT (sizeof(connect_mutators) / sizeof(connect_mutator_fn))
 #define SUBSCRIBE_MUTATOR_COUNT (sizeof(subscribe_mutators) / sizeof(subscribe_mutator_fn))
@@ -2206,34 +2923,34 @@ auth_mutator_fn auth_mutators[] = {
 // 主调度函数：从 mutators 中随机选择一个进行变异
 void dispatch_connect_mutation(mqtt_connect_packet_t *pkt, int num_packets) {
     if (pkt == NULL) return;
-    int index = rand() % CONNECT_MUTATOR_COUNT;
+    int index = pick_weighted(connect_mutators_weights, (int)CONNECT_MUTATOR_COUNT);
     // printf("[DISPATCH] Applying mutator #%d\n", index);
     connect_mutators[index](pkt, 1); 
 }
 
 void dispatch_subscribe_mutation(mqtt_subscribe_packet_t *pkt, int num_packets) {
   if (pkt == NULL) return;
-  int index = rand() % SUBSCRIBE_MUTATOR_COUNT;
+  int index = pick_weighted(subscribe_mutators_weights, (int)SUBSCRIBE_MUTATOR_COUNT);
   // printf("[DISPATCH] Applying mutator #%d\n", index);
   subscribe_mutators[index](pkt, 1);
 }
 
 void dispatch_publish_mutation(mqtt_publish_packet_t *pkt, int num_packets) {
   if (pkt == NULL) return;
-  int index = rand() % PUBLISH_MUTATOR_COUNT;
+  int index = pick_weighted(publish_mutators_weights, (int)PUBLISH_MUTATOR_COUNT);
   // printf("[DISPATCH] Applying mutator #%d\n", index);
   publish_mutators[index](pkt, 1);
 }
 
 void dispatch_unsubscribe_mutation(mqtt_unsubscribe_packet_t *pkt, int num_packets) {
   if (pkt == NULL) return;
-  int index = rand() % UNSUBSCRIBE_MUTATOR_COUNT;
+  int index = pick_weighted(unsubscribe_mutators_weights, (int)UNSUBSCRIBE_MUTATOR_COUNT);
   // printf("[DISPATCH] Applying mutator #%d\n", index);
   unsubscribe_mutators[index](pkt, 1);
 }
 void dispatch_auth_mutation(mqtt_auth_packet_t *pkt, int num_packets) {
   if (pkt == NULL) return;
-  int index = rand() % AUTH_MUTATOR_COUNT;
+  int index = pick_weighted(auth_mutators_weights, (int)AUTH_MUTATOR_COUNT);
   // printf("[DISPATCH] Applying mutator #%d\n", index);
   auth_mutators[index](pkt, 1);
 }

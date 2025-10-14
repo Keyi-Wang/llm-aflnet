@@ -439,13 +439,19 @@ u32 pkt_num = 0; // packet num
 void *packets; // packet 指针
 const char* protocol_name = NULL;  // 初始化为 NULL
 u32 semantic_queue = 0;
-long total_msg_send = 0; 
+int total_msg_send = 0; 
 long region_mutate_cnt = 0;
 long region_total_cnt = 0;
 long M2_total_cnt = 0;
 double region_mutate_ratio = 0.0;
 double M2_ratio = 0.0;
 u32 region_cnt = 0;
+u32 M1_cal_cnt = 0;
+u32 M2_cal_cnt = 0;
+u32 M3_cal_cnt = 0;
+u32 M3_cur_cnt = 0;
+u32 M2_cur_cnt = 0;
+static uint64_t g_sem_total_ns = 0;
 void* generate_packets_by_protocol(const char* protocol_name, int count) {
     if (strcmp(protocol_name, "MQTT") == 0) {
         return (void*) generate_mqtt_packets(count);
@@ -1126,13 +1132,15 @@ int send_over_network()
   //write the request messages
   kliter_t(lms) *it;
   messages_sent = 0;
-
+  if(strcmp(stage_short,"dry")){
+    M1_cal_cnt += M2_start_region_ID;
+    M3_cal_cnt += M3_cur_cnt;
+    M2_cal_cnt += M2_cur_cnt;
+  }
   for (it = kl_begin(kl_messages); it != kl_end(kl_messages); it = kl_next(it)) {
     n = net_send(sockfd, timeout, kl_val(it)->mdata, kl_val(it)->msize);
     messages_sent++;
-    if(strcmp(stage_short,"dry")){
-      total_msg_send++;
-    }
+
     //Allocate memory to store new accumulated response buffer size
     response_bytes = (u32 *) ck_realloc(response_bytes, messages_sent * sizeof(u32));
 
@@ -3748,7 +3756,7 @@ static void perform_dry_run(char** argv) {
 
       if (bm_fd >= 0) {
         dprintf(bm_fd, "%s,%u\n",
-                basename(q->fname),
+                q->fname /* 若你的结构体字段是 q->fname 则改为 q->fname */,
                 q->bitmap_size);
       }
     switch (res) {
@@ -4608,12 +4616,14 @@ static void maybe_update_plot_file(double bitmap_cvg, double eps) {
      execs_per_sec */
 
   fprintf(plot_file,
-          "%llu, %llu, %u, %u, %u, %u, %0.02f%%, %llu, %llu, %u, %0.02f, %u, %u, %u, %ld, %llu, %llu\n",
-          get_cur_time() / 1000, queue_cycle - 1, current_entry, queued_paths,
-          pending_not_fuzzed, pending_favored, bitmap_cvg, unique_crashes,
-          unique_hangs, max_depth, eps, M2_start_region_ID, M2_region_count,
-          region_cnt, (long)total_msg_send, (unsigned long long)g_pkt_total,
-          (unsigned long long)g_pkt_not_suc);
+        "%llu, %llu, %u, %u, %u, %u, %0.02f%%, %llu, %llu, %u, %0.02f, %u, %u, %u, %llu, %llu, %u, %u, %u, %.3f\n",
+        get_cur_time() / 1000, queue_cycle - 1, current_entry, queued_paths,
+        pending_not_fuzzed, pending_favored, bitmap_cvg, unique_crashes,
+        unique_hangs, max_depth, eps, M2_start_region_ID, M2_region_count,
+        region_cnt, (unsigned long long)g_pkt_total,
+        (unsigned long long)g_pkt_not_suc, M1_cal_cnt, M2_cal_cnt, M3_cal_cnt,
+        (g_sem_total_ns / 1e9));
+
 
 
   fflush(plot_file);
@@ -5645,7 +5655,7 @@ EXP_ST u8 common_fuzz_stuff(char** argv, u8* out_buf, u32 len) {
   u32 region_count = 0;
   region_t *regions = (*extract_requests)(out_buf, len, &region_count);
   if (!region_count) PFATAL("AFLNet Region count cannot be Zero");
-
+  M2_cur_cnt = region_count;
   // update kl_messages linked list
   u32 i;
   kliter_t(lms) *prev_last_message, *cur_last_message;
@@ -6060,7 +6070,33 @@ void region_calculate(int region_count, int M2_start_region_ID, int M2_region_co
   region_mutate_ratio = (double)region_mutate_cnt / (double)region_total_cnt;
   M2_ratio = (double)M2_total_cnt / (double)region_total_cnt;
   region_cnt = region_count;
+  M3_cur_cnt = region_count - (M2_start_region_ID + M2_region_count);
 }
+
+
+/* === semantic 阶段总耗时统计 === */
+
+
+static inline uint64_t sem_now_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
+
+static void sem_print_total(void) {
+    fprintf(stderr, "[SEMANTIC] total=%.3f ms\n", g_sem_total_ns / 1e6);
+}
+
+__attribute__((constructor))
+static void sem_on_start(void) { atexit(sem_print_total); }
+int __sem_counted = 0;
+#define SEM_ACCUM_ONCE() do { \
+  if (!__sem_counted) { \
+    g_sem_total_ns += (sem_now_ns() - __t0_sem); \
+    __sem_counted = 1; \
+  } \
+} while (0)
+/* === /semantic === */
 
 /* Take the current entry from the queue, fuzz it for a while. This
    function is a tad too long... returns 0 if fuzzed successfully, 1 if
@@ -7274,7 +7310,7 @@ if (!pkt_num) {
 
 mqtt_packet_t *seed_pkts = malloc(pkt_num * sizeof(*seed_pkts));
 memcpy(seed_pkts, packets, pkt_num * sizeof(*seed_pkts));
-  
+uint64_t __t0_sem = sem_now_ns();   /* 入口打点 */ 
 // Step 2: Choose a random field in the structured messages and apply LLM-generated mutator to it. Return mutated structured messages(M2').
 stage_name  = "semantic";
 stage_short = "sem";
@@ -7368,7 +7404,10 @@ for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
     continue;
   }
 
-  if (common_fuzz_stuff(argv, output_buf, out_len)) goto abandon_entry;
+  if (common_fuzz_stuff(argv, output_buf, out_len)) {
+    SEM_ACCUM_ONCE();
+    goto abandon_entry;
+  }
       /* out_buf might have been mangled a bit, so let's restore it to its
        original size and shape. */
   if (queued_paths != semantic_queue) {
@@ -7383,9 +7422,9 @@ for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
   }
 
 }
+g_sem_total_ns += (sem_now_ns() - __t0_sem);  /* 退出累加 */
 free(packets);
 free(seed_pkts);
-
 real_havoc_stage:
   // goto abandon_entry;
   /* If we get here, we're about to enter the havoc stage. */
@@ -8673,7 +8712,7 @@ EXP_ST void setup_dirs_fds(void) {
 
   fprintf(plot_file, "# unix_time, cycles_done, cur_path, paths_total, "
                      "pending_total, pending_favs, map_size, unique_crashes, "
-                     "unique_hangs, max_depth, execs_per_sec, M2_start_region_ID, M2_region_count, region_cnt, total_msg_send, server_received_cnt, parser_success\n");
+                     "unique_hangs, max_depth, execs_per_sec, M2_start_region_ID, M2_region_count, region_cnt, server_receive_cnt, parser_success, M1_cal_cnt, M2_cal_cnt, M3_cal_cnt, semantic_exec_time\n");
                      /* ignore errors */
 
 }

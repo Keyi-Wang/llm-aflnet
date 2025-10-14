@@ -960,69 +960,102 @@ region_t* extract_requests_ftp(unsigned char* buf, unsigned int buf_size, unsign
   return regions;
 }
 
-region_t* extract_requests_mqtt(unsigned char* buf, unsigned int buf_size, unsigned int* region_count_ref)
-{
-  char *mem;
-  unsigned int mem_count = 0;
-  unsigned int mem_size = 1024;
+// 解析 MQTT VarInt（1~4 字节）。成功返回 0，并写出 value 与使用字节数 bytes_used。
+static int mqtt_decode_varint(const unsigned char* p, unsigned int max_len,
+                              unsigned int* value, unsigned int* bytes_used) {
+  unsigned int multiplier = 1;
+  unsigned int val = 0;
+  unsigned int i = 0;
+  while (1) {
+    if (i >= max_len || i >= 4) return -1; // 数据不足或超过规范最大 4 字节
+    unsigned int b = p[i++];
+    val += (b & 0x7F) * multiplier;
+    if ((b & 0x80) == 0) break;            // 最高位为 0，结束
+    multiplier *= 128;
+  }
+  *value = val;
+  *bytes_used = i;
+  return 0;
+}
+
+region_t* extract_requests_mqtt(unsigned char* buf, unsigned int buf_size,
+                                unsigned int* region_count_ref) {
   unsigned int region_count = 0;
-  unsigned int cur_start = 0;
-  unsigned int cur_end = 0;
-  region_t *regions = NULL;
-  mem=(char *)ck_alloc(mem_size);
-  while(cur_start < buf_size)
-  {
-		if ((buf_size - cur_start) == 1) {
-			region_count++;
-			regions = (region_t *)ck_realloc(regions, region_count * sizeof(region_t));
-			regions[region_count - 1].start_byte = cur_start;
-			regions[region_count - 1].end_byte = buf_size - 1;
-			regions[region_count - 1].state_sequence = NULL;
-			regions[region_count - 1].state_count = 0;	
-			break;	
-		}
-    // Read the packet header
-    memcpy(&mem[mem_count], buf + cur_start, 2);
-    cur_start = cur_start + 2;
-    // Check the packet length and update current_end
-    // mem[0] is Message Type. mem[1] is Msg Len.
-    if(mem[1] >= 0) 
-      cur_end = cur_start + mem[1] - 1;
-    else
-      cur_end = buf_size;
-    // Create a region for every request
-		if (regions == NULL) {
-      regions = ck_alloc(sizeof(region_t));  // 第一次分配
-      region_count = 1;
-    } else {
+  region_t* regions = NULL;
+
+  unsigned int cur = 0;
+  while (cur < buf_size) {
+    unsigned int start = cur;
+
+    // 至少需要 固定头1字节 + RL 至少1字节
+    if (buf_size - cur < 2) {
+      // 剩余不足一个完整头，按你的策略：把尾部视作一个 region（通常是半包）
       region_count++;
-      regions = ck_realloc(regions, region_count * sizeof(region_t));
+      regions = (region_t*)ck_realloc(regions, region_count * sizeof(region_t));
+      regions[region_count - 1].start_byte = cur;
+      regions[region_count - 1].end_byte   = buf_size - 1;   // inclusive
+      regions[region_count - 1].state_sequence = NULL;
+      regions[region_count - 1].state_count    = 0;
+      break;
     }
 
-		regions[region_count - 1].start_byte = cur_start - 2;
-		regions[region_count - 1].end_byte = cur_end;
-		regions[region_count - 1].state_sequence = NULL;
-		regions[region_count - 1].state_count = 0;
-    if (!regions) { FATAL("Out of memory"); }
-    // Update the indices
-    mem_count = 0;
-    cur_start = cur_end + 1;
-    cur_end = cur_start;
+    // 固定头第1字节：类型+标志（此处不校验合法性，交给被测端）
+    unsigned char header1 = buf[cur++];
+    (void)header1;
+
+    // 解析 VarInt Remaining Length
+    unsigned int rl = 0, rl_bytes = 0;
+    if (mqtt_decode_varint(buf + cur, buf_size - cur, &rl, &rl_bytes) != 0) {
+      // RL 不完整或非法，把剩余都当作一个 region（半包）
+      region_count++;
+      regions = (region_t*)ck_realloc(regions, region_count * sizeof(region_t));
+      regions[region_count - 1].start_byte = start;
+      regions[region_count - 1].end_byte   = buf_size - 1;
+      regions[region_count - 1].state_sequence = NULL;
+      regions[region_count - 1].state_count    = 0;
+      break;
+    }
+    cur += rl_bytes;
+
+    // 报文总长度 = 1(首字节) + rl_bytes(变长长度本身) + rl(负载)
+    unsigned int packet_total = 1u + rl_bytes + rl;
+    unsigned int packet_end_exclusive = start + packet_total;
+
+    if (packet_end_exclusive > buf_size) {
+      // 半包：数据不够整帧，按尾部 region 结束
+      region_count++;
+      regions = (region_t*)ck_realloc(regions, region_count * sizeof(region_t));
+      regions[region_count - 1].start_byte = start;
+      regions[region_count - 1].end_byte   = buf_size - 1;
+      regions[region_count - 1].state_sequence = NULL;
+      regions[region_count - 1].state_count    = 0;
+      break;
+    }
+
+    // 正常一帧：start .. end（包含）
+    region_count++;
+    regions = (region_t*)ck_realloc(regions, region_count * sizeof(region_t));
+    regions[region_count - 1].start_byte = start;
+    regions[region_count - 1].end_byte   = packet_end_exclusive - 1;
+    regions[region_count - 1].state_sequence = NULL;
+    regions[region_count - 1].state_count    = 0;
+
+    // 继续切下一帧（允许一个 buf 里有多帧）
+    cur = packet_end_exclusive;
   }
-  if(mem) ck_free(mem);
-  //in case region_count equals zero, it means that the structure of the buffer is broken
-  //hence we create one region for the whole buffer
-	if ((region_count == 0) && (buf_size > 0)) {
-		regions = (region_t *)ck_realloc(regions, sizeof(region_t));
-		regions[0].start_byte = 0;
-		regions[0].end_byte = buf_size - 1;
-		regions[0].state_sequence = NULL;
-		regions[0].state_count = 0;
-		region_count = 1;
-	}
-	*region_count_ref = region_count;
-	return regions;
+
+  if ((region_count == 0) && (buf_size > 0)) {
+    regions = (region_t*)ck_realloc(regions, sizeof(region_t));
+    regions[0].start_byte = 0;
+    regions[0].end_byte   = buf_size - 1;
+    regions[0].state_sequence = NULL;
+    regions[0].state_count    = 0;
+    region_count = 1;
+  }
+  *region_count_ref = region_count;
+  return regions;
 }
+
 
 region_t* extract_requests_sip(unsigned char* buf, unsigned int buf_size, unsigned int* region_count_ref)
 {
