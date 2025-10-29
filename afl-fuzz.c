@@ -1132,11 +1132,11 @@ int send_over_network()
   //write the request messages
   kliter_t(lms) *it;
   messages_sent = 0;
-  if(strcmp(stage_short,"dry")){
-    M1_cal_cnt += M2_start_region_ID;
-    M3_cal_cnt += M3_cur_cnt;
-    M2_cal_cnt += M2_cur_cnt;
-  }
+  // if(strcmp(stage_short,"dry")){
+  //   M1_cal_cnt += M2_start_region_ID;
+  //   M3_cal_cnt += M3_cur_cnt;
+  //   M2_cal_cnt += M2_cur_cnt;
+  // }
   for (it = kl_begin(kl_messages); it != kl_end(kl_messages); it = kl_next(it)) {
     n = net_send(sockfd, timeout, kl_val(it)->mdata, kl_val(it)->msize);
     messages_sent++;
@@ -4594,7 +4594,7 @@ static void maybe_update_plot_file(double bitmap_cvg, double eps) {
 
   static u32 prev_qp, prev_pf, prev_pnf, prev_ce, prev_md;
   static u64 prev_qc, prev_uc, prev_uh;
-  stats_load_state();
+  // stats_load_state();
   if (prev_qp == queued_paths && prev_pf == pending_favored &&
       prev_pnf == pending_not_fuzzed && prev_ce == current_entry &&
       prev_qc == queue_cycle && prev_uc == unique_crashes &&
@@ -5655,7 +5655,7 @@ EXP_ST u8 common_fuzz_stuff(char** argv, u8* out_buf, u32 len) {
   u32 region_count = 0;
   region_t *regions = (*extract_requests)(out_buf, len, &region_count);
   if (!region_count) PFATAL("AFLNet Region count cannot be Zero");
-  M2_cur_cnt = region_count;
+  // M2_cur_cnt = region_count;
   // update kl_messages linked list
   u32 i;
   kliter_t(lms) *prev_last_message, *cur_last_message;
@@ -6227,7 +6227,7 @@ AFLNET_REGIONS_SELECTION:;
     M2_region_count = UR(total_region - M2_start_region_ID);
     if (M2_region_count == 0) M2_region_count++; //Mutate one region at least
   }
-  region_calculate(queue_cur->region_count, M2_start_region_ID, M2_region_count);
+  // region_calculate(queue_cur->region_count, M2_start_region_ID, M2_region_count);
   /* Construct the kl_messages linked list and identify boundary pointers (M2_prev and M2_next) */
   kl_messages = construct_kl_messages(queue_cur->fname, queue_cur->regions, queue_cur->region_count);
 
