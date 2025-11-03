@@ -137,61 +137,101 @@ int parse_unsubscribe_packet(const uint8_t *buf, size_t len, mqtt_unsubscribe_pa
 
     size_t offset = 0;
 
-    // 固定头部
-    pkt->fixed_header.packet_type = buf[offset++];
-    size_t rem_len_bytes = 0;
-    uint32_t rem_len = 0;
+    /* 注意：这里的 buf/len 是“payload”（remaining_length 指向的那段），
+       所以不要再读取固定头和 remaining_length */
 
-    int ret = decode_remaining_length(buf + offset, len - offset, &rem_len, &rem_len_bytes);
-    if (ret != 0) {
-        // 解码失败
-        return -1;
-    }
-
-    pkt->fixed_header.remaining_length = rem_len;
-    offset += rem_len_bytes;
-
+    /* 可变头：packet identifier */
     if (offset + 2 > len) return -1;
-
-    // 可变头部：packet identifier
     pkt->variable_header.packet_identifier = read_uint16(buf + offset);
     offset += 2;
 
-    // 属性长度（Variable Byte Integer）
-    
+    /* 属性长度（Variable Byte Integer） */
     uint32_t prop_len = 0;
-    u32 prop_len_bytes = 0;
-
-    ret = decode_remaining_length(buf + offset, len - offset, &prop_len, &prop_len_bytes);
-    if (ret != 0) {
-        return -1; // 解码失败，返回错误
+    size_t   prop_len_bytes = 0;   /* 建议 size_t，统一类型 */
+    if (decode_remaining_length(buf + offset, len - offset, &prop_len, (int*)&prop_len_bytes) != 0) {
+        return -1;
     }
+    offset += prop_len_bytes;
 
+    if (prop_len > MAX_PROPERTIES_LEN) return -1;
+    if (offset + prop_len > len) return -1;
     pkt->variable_header.property_len = prop_len;
-    offset += prop_len_bytes;
-    offset += prop_len_bytes;
+    memcpy(pkt->variable_header.properties, buf + offset, prop_len);
+    offset += prop_len;
 
-    if (pkt->variable_header.property_len > MAX_PROPERTIES_LEN || offset + pkt->variable_header.property_len > len) return -1;
-    memcpy(pkt->variable_header.properties, buf + offset, pkt->variable_header.property_len);
-    offset += pkt->variable_header.property_len;
-
-    // 有效载荷：读取 topic filters
+    /* 载荷：topic filters（至少 1 个） */
     uint8_t topic_count = 0;
     while (offset + 2 <= len && topic_count < MAX_TOPIC_FILTERS) {
         uint16_t topic_len = read_uint16(buf + offset);
         offset += 2;
 
-        if (offset + topic_len > len || topic_len >= MAX_TOPIC_LEN) return -1;
+        if (topic_len == 0) {           /* 空过滤器非法 */
+            return -1;
+        }
+        if (topic_len >= MAX_TOPIC_LEN) { /* 需要留 '\0'，严格可用 > MAX_TOPIC_LEN-1 */
+            return -1;
+        }
+        if (offset + topic_len > len) {
+            return -1;
+        }
 
         memcpy(pkt->payload.topic_filters[topic_count], buf + offset, topic_len);
-        pkt->payload.topic_filters[topic_count][topic_len] = '\0';  // Null-terminate
+        pkt->payload.topic_filters[topic_count][topic_len] = '\0';
         offset += topic_len;
         topic_count++;
     }
 
+    if (topic_count == 0) {
+        /* MQTT 规范要求至少一个 topic filter */
+        return -1;
+    }
+
     pkt->payload.topic_count = topic_count;
 
+    /* fixed_header 的 packet_type / remaining_length 已在 parse_mqtt_msg() 里写入
+       （通过 union 的同址特性）。这里无需再设置。 */
     return 0;
+}
+
+int parse_disconnect_packet(const uint8_t *buf, size_t len, mqtt_disconnect_packet_t *pkt) {
+    if (!buf || !pkt) return -1;
+
+    size_t offset = 0;
+
+    /* remaining_length==0：无 reason / 无属性 */
+    if (len == 0) {
+        pkt->variable_header.reason_code = 0x00;
+        pkt->variable_header.property_len = 0;
+        return 0;
+    }
+
+    /* 有 1 字节 reason_code */
+    pkt->variable_header.reason_code = buf[offset++];
+    if (offset == len) {
+        pkt->variable_header.property_len = 0;
+        return 0;
+    }
+
+    /* 有属性：Property Length (varint) + Properties */
+    uint32_t prop_len = 0;
+    int prop_len_bytes = 0;
+    if (decode_remaining_length(buf + offset, len - offset, &prop_len, &prop_len_bytes) != 0)
+        return -1;
+    offset += prop_len_bytes;
+
+    if (prop_len > MAX_PROPERTIES_LEN) return -1;
+    if (offset + prop_len > len) return -1;
+
+    pkt->variable_header.property_len = prop_len;
+    memcpy(pkt->variable_header.properties, buf + offset, prop_len);
+    offset += prop_len;
+
+    return 0;
+}
+
+int parse_pingreq_packet(const uint8_t *buf, size_t len, mqtt_pingreq_packet_t *pkt) {
+    (void)buf; (void)pkt;
+    return (len == 0) ? 0 : -1;
 }
 
 int parse_auth_packet(const uint8_t *buf, size_t len, mqtt_auth_packet_t *pkt) {
@@ -233,6 +273,139 @@ int parse_auth_packet(const uint8_t *buf, size_t len, mqtt_auth_packet_t *pkt) {
     if ((offset - (1 + rem_len_bytes)) != pkt->fixed_header.remaining_length) {
         return -1;
     }
+
+    return 0;
+}
+
+/* ---- PUBLISH 响应类公共模式：PID(2) [ReasonCode(1)] [PropertyLen(varint) Properties...] ---- */
+
+/* PUBACK */
+int parse_puback_packet(const uint8_t *buf, size_t len, mqtt_puback_packet_t *pkt) {
+    if (!buf || !pkt || len < 2) return -1;
+    size_t offset = 0;
+
+    pkt->variable_header.packet_identifier = read_uint16(buf + offset);
+    offset += 2;
+
+    /* MQTT 3.1.1: 只有 Packet Identifier；MQTT 5: 后续可能有 Reason Code + Properties */
+    if (offset >= len) {
+        pkt->variable_header.reason_code = 0x00;  // Success (默认)
+        pkt->variable_header.property_len = 0;
+        return 0;
+    }
+
+    /* 有 Reason Code */
+    pkt->variable_header.reason_code = buf[offset++];
+    if (offset >= len) {
+        pkt->variable_header.property_len = 0;
+        return 0;
+    }
+
+    /* 有 Properties */
+    uint32_t prop_len = 0; int prop_len_bytes = 0;
+    if (decode_remaining_length(buf + offset, len - offset, &prop_len, &prop_len_bytes) != 0)
+        return -1;
+    offset += prop_len_bytes;
+    if (prop_len > MAX_PROPERTIES_LEN || offset + prop_len > len) return -1;
+    pkt->variable_header.property_len = prop_len;
+    memcpy(pkt->variable_header.properties, buf + offset, prop_len);
+    offset += prop_len;
+
+    return 0;
+}
+
+/* PUBREC */
+int parse_pubrec_packet(const uint8_t *buf, size_t len, mqtt_pubrec_packet_t *pkt) {
+    if (!buf || !pkt || len < 2) return -1;
+    size_t offset = 0;
+
+    pkt->variable_header.packet_identifier = read_uint16(buf + offset);
+    offset += 2;
+
+    if (offset >= len) {
+        pkt->variable_header.reason_code = 0x00;
+        pkt->variable_header.property_len = 0;
+        return 0;
+    }
+
+    pkt->variable_header.reason_code = buf[offset++];
+    if (offset >= len) {
+        pkt->variable_header.property_len = 0;
+        return 0;
+    }
+
+    uint32_t prop_len = 0; int prop_len_bytes = 0;
+    if (decode_remaining_length(buf + offset, len - offset, &prop_len, &prop_len_bytes) != 0)
+        return -1;
+    offset += prop_len_bytes;
+    if (prop_len > MAX_PROPERTIES_LEN || offset + prop_len > len) return -1;
+    pkt->variable_header.property_len = prop_len;
+    memcpy(pkt->variable_header.properties, buf + offset, prop_len);
+    offset += prop_len;
+
+    return 0;
+}
+
+/* PUBREL（注意：固定头低 4 bit 必须为 0x2，但这里在 parse_mqtt_msg 检/忽略均可） */
+int parse_pubrel_packet(const uint8_t *buf, size_t len, mqtt_pubrel_packet_t *pkt) {
+    if (!buf || !pkt || len < 2) return -1;
+    size_t offset = 0;
+
+    pkt->variable_header.packet_identifier = read_uint16(buf + offset);
+    offset += 2;
+
+    if (offset >= len) {
+        pkt->variable_header.reason_code = 0x00;
+        pkt->variable_header.property_len = 0;
+        return 0;
+    }
+
+    pkt->variable_header.reason_code = buf[offset++];
+    if (offset >= len) {
+        pkt->variable_header.property_len = 0;
+        return 0;
+    }
+
+    uint32_t prop_len = 0; int prop_len_bytes = 0;
+    if (decode_remaining_length(buf + offset, len - offset, &prop_len, &prop_len_bytes) != 0)
+        return -1;
+    offset += prop_len_bytes;
+    if (prop_len > MAX_PROPERTIES_LEN || offset + prop_len > len) return -1;
+    pkt->variable_header.property_len = prop_len;
+    memcpy(pkt->variable_header.properties, buf + offset, prop_len);
+    offset += prop_len;
+
+    return 0;
+}
+
+/* PUBCOMP */
+int parse_pubcomp_packet(const uint8_t *buf, size_t len, mqtt_pubcomp_packet_t *pkt) {
+    if (!buf || !pkt || len < 2) return -1;
+    size_t offset = 0;
+
+    pkt->variable_header.packet_identifier = read_uint16(buf + offset);
+    offset += 2;
+
+    if (offset >= len) {
+        pkt->variable_header.reason_code = 0x00;
+        pkt->variable_header.property_len = 0;
+        return 0;
+    }
+
+    pkt->variable_header.reason_code = buf[offset++];
+    if (offset >= len) {
+        pkt->variable_header.property_len = 0;
+        return 0;
+    }
+
+    uint32_t prop_len = 0; int prop_len_bytes = 0;
+    if (decode_remaining_length(buf + offset, len - offset, &prop_len, &prop_len_bytes) != 0)
+        return -1;
+    offset += prop_len_bytes;
+    if (prop_len > MAX_PROPERTIES_LEN || offset + prop_len > len) return -1;
+    pkt->variable_header.property_len = prop_len;
+    memcpy(pkt->variable_header.properties, buf + offset, prop_len);
+    offset += prop_len;
 
     return 0;
 }
@@ -281,7 +454,27 @@ size_t parse_mqtt_msg(const uint8_t *buf, size_t buf_len, mqtt_packet_t *out_pac
         } else if( packet_type == MQTT_AUTH) {
             out_packets[count].type = TYPE_AUTH;
             if (parse_auth_packet(payload_buf, payload_len, &out_packets[count].auth) != 0) break;
-        } 
+        } else if (packet_type == MQTT_PUBACK) {
+            out_packets[count].type = TYPE_PUBACK;
+            if (parse_puback_packet(payload_buf, payload_len, &out_packets[count].puback) != 0) break;
+        } else if (packet_type == MQTT_PUBREC) {
+            out_packets[count].type = TYPE_PUBREC;
+            if (parse_pubrec_packet(payload_buf, payload_len, &out_packets[count].pubrec) != 0) break;
+        } else if (packet_type == MQTT_PUBREL) {
+            out_packets[count].type = TYPE_PUBREL;
+            if (parse_pubrel_packet(payload_buf, payload_len, &out_packets[count].pubrel) != 0) break;
+        } else if (packet_type == MQTT_PUBCOMP) {
+            out_packets[count].type = TYPE_PUBCOMP;
+            if (parse_pubcomp_packet(payload_buf, payload_len, &out_packets[count].pubcomp) != 0) break;
+        } else if (packet_type == MQTT_PINGREQ) {
+            out_packets[count].type = TYPE_PINGREQ;
+            if (parse_pingreq_packet(payload_buf, payload_len, &out_packets[count].pingreq) != 0) break;
+
+        } else if (packet_type == MQTT_DISCONNECT) {
+            out_packets[count].type = TYPE_DISCONNECT;
+            if (parse_disconnect_packet(payload_buf, payload_len, &out_packets[count].disconnect) != 0) break;
+        }
+
 
 
 
@@ -368,6 +561,81 @@ void print_mqtt_packets(const mqtt_packet_t *pkt, size_t count) {
                 // 可打印 properties 内容
                 break;
             }
+                        case TYPE_PUBACK: {
+                printf("PUBACK (0x%02X)\n", pkt->puback.fixed_header.packet_type);
+                printf("Remaining Length: %u\n", pkt->puback.fixed_header.remaining_length);
+                printf("  Packet ID     : %u\n", pkt->puback.variable_header.packet_identifier);
+                printf("  Reason Code   : %u\n", pkt->puback.variable_header.reason_code);
+                printf("  Property Len  : %u\n", pkt->puback.variable_header.property_len);
+                if (pkt->puback.variable_header.property_len) {
+                    printf("  Properties    : ");
+                    for (size_t i = 0; i < pkt->puback.variable_header.property_len; ++i)
+                        printf("%02X ", pkt->puback.variable_header.properties[i]);
+                    printf("\n");
+                }
+                break;
+            }
+            case TYPE_PUBREC: {
+                printf("PUBREC (0x%02X)\n", pkt->pubrec.fixed_header.packet_type);
+                printf("Remaining Length: %u\n", pkt->pubrec.fixed_header.remaining_length);
+                printf("  Packet ID     : %u\n", pkt->pubrec.variable_header.packet_identifier);
+                printf("  Reason Code   : %u\n", pkt->pubrec.variable_header.reason_code);
+                printf("  Property Len  : %u\n", pkt->pubrec.variable_header.property_len);
+                if (pkt->pubrec.variable_header.property_len) {
+                    printf("  Properties    : ");
+                    for (size_t i = 0; i < pkt->pubrec.variable_header.property_len; ++i)
+                        printf("%02X ", pkt->pubrec.variable_header.properties[i]);
+                    printf("\n");
+                }
+                break;
+            }
+            case TYPE_PUBREL: {
+                printf("PUBREL (0x%02X)\n", pkt->pubrel.fixed_header.packet_type);
+                printf("Remaining Length: %u\n", pkt->pubrel.fixed_header.remaining_length);
+                printf("  Packet ID     : %u\n", pkt->pubrel.variable_header.packet_identifier);
+                printf("  Reason Code   : %u\n", pkt->pubrel.variable_header.reason_code);
+                printf("  Property Len  : %u\n", pkt->pubrel.variable_header.property_len);
+                if (pkt->pubrel.variable_header.property_len) {
+                    printf("  Properties    : ");
+                    for (size_t i = 0; i < pkt->pubrel.variable_header.property_len; ++i)
+                        printf("%02X ", pkt->pubrel.variable_header.properties[i]);
+                    printf("\n");
+                }
+                break;
+            }
+            case TYPE_PUBCOMP: {
+                printf("PUBCOMP (0x%02X)\n", pkt->pubcomp.fixed_header.packet_type);
+                printf("Remaining Length: %u\n", pkt->pubcomp.fixed_header.remaining_length);
+                printf("  Packet ID     : %u\n", pkt->pubcomp.variable_header.packet_identifier);
+                printf("  Reason Code   : %u\n", pkt->pubcomp.variable_header.reason_code);
+                printf("  Property Len  : %u\n", pkt->pubcomp.variable_header.property_len);
+                if (pkt->pubcomp.variable_header.property_len) {
+                    printf("  Properties    : ");
+                    for (size_t i = 0; i < pkt->pubcomp.variable_header.property_len; ++i)
+                        printf("%02X ", pkt->pubcomp.variable_header.properties[i]);
+                    printf("\n");
+                }
+                break;
+            }
+            case TYPE_PINGREQ: {
+                printf("PINGREQ (0x%02X)\n", pkt->pingreq.fixed_header.packet_type);
+                printf("Remaining Length: %u\n", pkt->pingreq.fixed_header.remaining_length);
+                break;
+            }
+            case TYPE_DISCONNECT: {
+                printf("DISCONNECT (0x%02X)\n", pkt->disconnect.fixed_header.packet_type);
+                printf("Remaining Length: %u\n", pkt->disconnect.fixed_header.remaining_length);
+                printf("  Reason Code   : %u\n", pkt->disconnect.variable_header.reason_code);
+                printf("  Property Len  : %u\n", pkt->disconnect.variable_header.property_len);
+                if (pkt->disconnect.variable_header.property_len) {
+                    printf("  Properties    : ");
+                    for (size_t i = 0; i < pkt->disconnect.variable_header.property_len; ++i)
+                        printf("%02X ", pkt->disconnect.variable_header.properties[i]);
+                    printf("\n");
+                }
+                break;
+            }
+
             case TYPE_UNKNOWN:
             default:
                 printf("UNKNOWN TYPE\n");

@@ -191,8 +191,8 @@ size_t parse_smtp_msg(const uint8_t *buf, size_t buf_len,
             case SMTP_PKT_MAIL: {
                 /* 语法：MAIL SP FROM: reverse-path [ SP esmtp-params ] */
                 set_cstr(pkt->pkt.mail.command, SMTP_SZ_CMD, "MAIL");
-                set_space_opt(pkt->pkt.mail.space1, has_arg ? 1 : 0);
-                set_cstr(pkt->pkt.mail.from_keyword, SMTP_SZ_CMD, "FROM:");
+                // set_space_opt(pkt->pkt.mail.space1, has_arg ? 1 : 0);
+                // set_cstr(pkt->pkt.mail.from_keyword, SMTP_SZ_CMD, "FROM:");
 
                 const char *t1b=NULL, *t1e=NULL;
                 const char *p = next_token(ab, ae, &t1b, &t1e);
@@ -226,8 +226,8 @@ size_t parse_smtp_msg(const uint8_t *buf, size_t buf_len,
             case SMTP_PKT_RCPT: {
                 /* 语法：RCPT SP TO: forward-path [ SP esmtp-params ] */
                 set_cstr(pkt->pkt.rcpt.command, SMTP_SZ_CMD, "RCPT");
-                set_space_opt(pkt->pkt.rcpt.space1, has_arg ? 1 : 0);
-                set_cstr(pkt->pkt.rcpt.to_keyword, SMTP_SZ_CMD, "TO:");
+                // set_space_opt(pkt->pkt.rcpt.space1, has_arg ? 1 : 0);
+                // set_cstr(pkt->pkt.rcpt.to_keyword, SMTP_SZ_CMD, "TO:");
 
                 const char *t1b=NULL, *t1e=NULL;
                 const char *p = next_token(ab, ae, &t1b, &t1e);

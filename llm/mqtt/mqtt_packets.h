@@ -19,6 +19,24 @@
 #define MQTT_PUBLISH     3
 #define MQTT_UNSUBSCRIBE  10
 #define MQTT_AUTH        15
+#ifndef MQTT_PUBACK
+#define MQTT_PUBACK   4
+#endif
+#ifndef MQTT_PUBREC
+#define MQTT_PUBREC   5
+#endif
+#ifndef MQTT_PUBREL
+#define MQTT_PUBREL   6   /* 注意：固定头低 4 位必须为 0x2 -> 0x62 */
+#endif
+#ifndef MQTT_PUBCOMP
+#define MQTT_PUBCOMP  7
+#endif
+#ifndef MQTT_PINGREQ
+#define MQTT_PINGREQ    12
+#endif
+#ifndef MQTT_DISCONNECT
+#define MQTT_DISCONNECT 14
+#endif
 
 typedef struct {
     uint8_t packet_type;
@@ -121,22 +139,75 @@ typedef struct {
     mqtt_auth_variable_header_t variable_header;        // 可变头部
 } mqtt_auth_packet_t;
 
+typedef struct {
+    uint16_t packet_identifier;
+    uint8_t  reason_code;     /* 若缺省未出现，解析时应置 0x00 (Success) */
+    uint32_t property_len;
+    uint8_t  properties[MAX_PROPERTIES_LEN];
+} mqtt_pubresp_variable_header_t;
+
+typedef struct {
+    mqtt_fixed_header_t            fixed_header;
+    mqtt_pubresp_variable_header_t variable_header;
+} mqtt_puback_packet_t;
+
+typedef struct {
+    mqtt_fixed_header_t            fixed_header;
+    mqtt_pubresp_variable_header_t variable_header;
+} mqtt_pubrec_packet_t;
+
+typedef struct {
+    mqtt_fixed_header_t            fixed_header;
+    mqtt_pubresp_variable_header_t variable_header;
+} mqtt_pubrel_packet_t;
+
+typedef struct {
+    mqtt_fixed_header_t            fixed_header;
+    mqtt_pubresp_variable_header_t variable_header;
+} mqtt_pubcomp_packet_t;
+
+typedef struct {
+    mqtt_fixed_header_t fixed_header;
+} mqtt_pingreq_packet_t;
+
+
+typedef struct {
+    mqtt_fixed_header_t fixed_header;
+    struct {
+        uint8_t  reason_code;     /* 缺省 0x00 */
+        uint32_t property_len;    /* 缺省 0 */
+        uint8_t  properties[MAX_PROPERTIES_LEN];
+    } variable_header;
+} mqtt_disconnect_packet_t;
+
 typedef enum {
     TYPE_CONNECT,
     TYPE_SUBSCRIBE,
     TYPE_PUBLISH,
     TYPE_UNSUBSCRIBE,
     TYPE_AUTH,
+    TYPE_PUBACK,
+    TYPE_PUBREC,
+    TYPE_PUBREL,
+    TYPE_PUBCOMP,
+    TYPE_PINGREQ,
+    TYPE_DISCONNECT,
     TYPE_UNKNOWN
 } mqtt_type_t;
 
 typedef struct {
     mqtt_type_t type;
     union {
-        mqtt_connect_packet_t connect;
-        mqtt_subscribe_packet_t subscribe;
-        mqtt_publish_packet_t publish;
-        mqtt_unsubscribe_packet_t unsubscribe;
-        mqtt_auth_packet_t auth;
+        mqtt_connect_packet_t      connect;
+        mqtt_subscribe_packet_t    subscribe;
+        mqtt_publish_packet_t      publish;
+        mqtt_unsubscribe_packet_t  unsubscribe;
+        mqtt_auth_packet_t         auth;
+        mqtt_puback_packet_t   puback;
+        mqtt_pubrec_packet_t   pubrec;
+        mqtt_pubrel_packet_t   pubrel;
+        mqtt_pubcomp_packet_t  pubcomp;
+        mqtt_pingreq_packet_t      pingreq;
+        mqtt_disconnect_packet_t   disconnect;
     };
 } mqtt_packet_t;
