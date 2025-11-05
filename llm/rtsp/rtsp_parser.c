@@ -400,7 +400,7 @@ static const char *allowed_headers[][32] = {
 
     /* SETUP */
     {"Accept-Language","Authorization","Bandwidth","Blocksize","Cache-Control","Conference",
-     "Connection","CSeq","Date","From","If-Modified-Since","Proxy-Require","Referer",
+     "Connection","CSeq","Date","From","If-Modified-Since","Proxy-Require","Session","Referer",
      "Require","Transport","User-Agent","Via", NULL},
 
     /* PLAY */
@@ -618,6 +618,8 @@ size_t parse_rtsp_msg(const uint8_t *buf, size_t buf_len,
                             fill_content_length_header(&pkt->describe.content_length_header, value);
                         else if (strcasecmp(name, "Content-Location") == 0)
                             fill_content_location_header(&pkt->describe.content_location_header, value);
+                        else if (strcasecmp(name, "CSeq") == 0)
+                            fill_cseq_header(&pkt->options.cseq_header, value);
                         else if (strcasecmp(name, "Expires") == 0)
                             fill_expires_header(&pkt->describe.expires_header, value);
                         else if (strcasecmp(name, "From") == 0)
@@ -672,6 +674,8 @@ size_t parse_rtsp_msg(const uint8_t *buf, size_t buf_len,
                             fill_referer_header(&pkt->setup.referer_header, value);
                         else if (strcasecmp(name, "Require") == 0)
                             fill_require_header(&pkt->setup.require_header, value);
+                        else if (strcasecmp(name, "Session") == 0)
+                            fill_session_header(&pkt->setup.session_header, value);
                         else if (strcasecmp(name, "Transport") == 0)
                             fill_transport_header(&pkt->setup.transport_header, value);
                         else if (strcasecmp(name, "User-Agent") == 0)

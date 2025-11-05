@@ -407,6 +407,7 @@ typedef struct {
     require_header_rtsp_t         require_header;         // optional
     transport_header_rtsp_t       transport_header;       // mandatory
     user_agent_header_rtsp_t      user_agent_header;      // optional
+    session_header_rtsp_t        session_header;        // optional
 
     char end_crlf[RTSP_CRLF_LEN]; // fixed-value: "\r\n"
 } rtsp_setup_packet_t;

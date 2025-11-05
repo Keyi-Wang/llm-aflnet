@@ -138,7 +138,7 @@ int serialize_options(const rtsp_options_packet_t *p, u8 *output_buf, u32 *out_l
                    p->user_agent_header.crlf);
 
     // === 5. Empty CRLF ===
-    APPEND_FMT(output_buf, offset, "%s", p->end_crlf);
+    APPEND_FMT(output_buf, offset, "%s", "\r\n");
 
     *out_len = offset;
     return 0;
@@ -358,14 +358,23 @@ int serialize_describe(const rtsp_describe_packet_t *p, u8 *output_buf, u32 *out
                    p->require_header.option_tag,
                    p->require_header.crlf);
 
-    if (p->session_header.name[0] && p->session_header.session_id[0])
-        APPEND_FMT(output_buf, offset, "%s%s%s%s%d%s",
-                   p->session_header.name,
-                   p->session_header.colon_space,
-                   p->session_header.session_id,
-                   p->session_header.semicolon_timeout,
-                   p->session_header.timeout,
-                   p->session_header.crlf);
+    if (p->session_header.name[0] && p->session_header.session_id[0]) {
+        if (p->session_header.semicolon_timeout[0]) {
+            APPEND_FMT(output_buf, offset, "%s%s%s%s%d%s",
+                    p->session_header.name,
+                    p->session_header.colon_space,
+                    p->session_header.session_id,
+                    p->session_header.semicolon_timeout,
+                    p->session_header.timeout,
+                    p->session_header.crlf);
+        } else {
+            APPEND_FMT(output_buf, offset, "%s%s%s%s",
+                    p->session_header.name,
+                    p->session_header.colon_space,
+                    p->session_header.session_id,
+                    p->session_header.crlf);
+        }
+    }
 
     if (p->user_agent_header.name[0] && p->user_agent_header.agent_string[0])
         APPEND_FMT(output_buf, offset, "%s%s%s%s",
@@ -375,7 +384,7 @@ int serialize_describe(const rtsp_describe_packet_t *p, u8 *output_buf, u32 *out
                    p->user_agent_header.crlf);
 
     // === 5. End CRLF ===
-    APPEND_FMT(output_buf, offset, "%s", p->end_crlf);
+    APPEND_FMT(output_buf, offset, "%s", "\r\n");
 
     *out_len = offset;
     return 0;
@@ -548,9 +557,26 @@ int serialize_setup(const rtsp_setup_packet_t *p, u8 *output_buf, u32 *out_len) 
                    p->transport_header.port_range,
                    p->transport_header.crlf);
     }
+    if (p->session_header.name[0] && p->session_header.session_id[0]) {
+        if (p->session_header.semicolon_timeout[0]) {
+            APPEND_FMT(output_buf, offset, "%s%s%s%s%d%s",
+                    p->session_header.name,
+                    p->session_header.colon_space,
+                    p->session_header.session_id,
+                    p->session_header.semicolon_timeout,
+                    p->session_header.timeout,
+                    p->session_header.crlf);
+        } else {
+            APPEND_FMT(output_buf, offset, "%s%s%s%s",
+                    p->session_header.name,
+                    p->session_header.colon_space,
+                    p->session_header.session_id,
+                    p->session_header.crlf);
+        }
+    }
 
     // === 6. End CRLF ===
-    APPEND_FMT(output_buf, offset, "%s", p->end_crlf);
+    APPEND_FMT(output_buf, offset, "%s", "\r\n");
 
     *out_len = offset;
     return 0;
@@ -682,14 +708,24 @@ int serialize_play(const rtsp_play_packet_t *p, u8 *output_buf, u32 *out_len) {
                    p->scale_header.value,
                    p->scale_header.crlf);
 
-    if (p->session_header.name[0] && p->session_header.session_id[0])
-        APPEND_FMT(output_buf, offset, "%s%s%s%s%d%s",
-                   p->session_header.name,
-                   p->session_header.colon_space,
-                   p->session_header.session_id,
-                   p->session_header.semicolon_timeout,
-                   p->session_header.timeout,
-                   p->session_header.crlf);
+    if (p->session_header.name[0] && p->session_header.session_id[0]) {
+        if (p->session_header.semicolon_timeout[0]) {
+            APPEND_FMT(output_buf, offset, "%s%s%s%s%d%s",
+                    p->session_header.name,
+                    p->session_header.colon_space,
+                    p->session_header.session_id,
+                    p->session_header.semicolon_timeout,
+                    p->session_header.timeout,
+                    p->session_header.crlf);
+        } else {
+            APPEND_FMT(output_buf, offset, "%s%s%s%s",
+                    p->session_header.name,
+                    p->session_header.colon_space,
+                    p->session_header.session_id,
+                    p->session_header.crlf);
+        }
+    }
+
 
     if (p->speed_header.name[0])
         APPEND_FMT(output_buf, offset, "%s%s%.3f%s",
@@ -706,7 +742,7 @@ int serialize_play(const rtsp_play_packet_t *p, u8 *output_buf, u32 *out_len) {
                    p->user_agent_header.crlf);
 
     // === 5. End CRLF ===
-    APPEND_FMT(output_buf, offset, "%s", p->end_crlf);
+    APPEND_FMT(output_buf, offset, "%s", "\r\n");
 
     *out_len = offset;
     return 0;
@@ -831,14 +867,23 @@ int serialize_pause(const rtsp_pause_packet_t *p, u8 *output_buf, u32 *out_len) 
                    p->require_header.option_tag,
                    p->require_header.crlf);
 
-    if (p->session_header.name[0] && p->session_header.session_id[0])
-        APPEND_FMT(output_buf, offset, "%s%s%s%s%d%s",
-                   p->session_header.name,
-                   p->session_header.colon_space,
-                   p->session_header.session_id,
-                   p->session_header.semicolon_timeout,
-                   p->session_header.timeout,
-                   p->session_header.crlf);
+    if (p->session_header.name[0] && p->session_header.session_id[0]) {
+        if (p->session_header.semicolon_timeout[0]) {
+            APPEND_FMT(output_buf, offset, "%s%s%s%s%d%s",
+                    p->session_header.name,
+                    p->session_header.colon_space,
+                    p->session_header.session_id,
+                    p->session_header.semicolon_timeout,
+                    p->session_header.timeout,
+                    p->session_header.crlf);
+        } else {
+            APPEND_FMT(output_buf, offset, "%s%s%s%s",
+                    p->session_header.name,
+                    p->session_header.colon_space,
+                    p->session_header.session_id,
+                    p->session_header.crlf);
+        }
+    }
 
     if (p->user_agent_header.name[0] && p->user_agent_header.agent_string[0])
         APPEND_FMT(output_buf, offset, "%s%s%s%s",
@@ -848,7 +893,7 @@ int serialize_pause(const rtsp_pause_packet_t *p, u8 *output_buf, u32 *out_len) 
                    p->user_agent_header.crlf);
 
     // === 5. End CRLF ===
-    APPEND_FMT(output_buf, offset, "%s", p->end_crlf);
+    APPEND_FMT(output_buf, offset, "%s", "\r\n");
 
     *out_len = offset;
     return 0;
@@ -957,14 +1002,23 @@ int serialize_teardown(const rtsp_teardown_packet_t *p, u8 *output_buf, u32 *out
                    p->require_header.option_tag,
                    p->require_header.crlf);
 
-    if (p->session_header.name[0] && p->session_header.session_id[0])
-        APPEND_FMT(output_buf, offset, "%s%s%s%s%d%s",
-                   p->session_header.name,
-                   p->session_header.colon_space,
-                   p->session_header.session_id,
-                   p->session_header.semicolon_timeout,
-                   p->session_header.timeout,
-                   p->session_header.crlf);
+    if (p->session_header.name[0] && p->session_header.session_id[0]) {
+        if (p->session_header.semicolon_timeout[0]) {
+            APPEND_FMT(output_buf, offset, "%s%s%s%s%d%s",
+                    p->session_header.name,
+                    p->session_header.colon_space,
+                    p->session_header.session_id,
+                    p->session_header.semicolon_timeout,
+                    p->session_header.timeout,
+                    p->session_header.crlf);
+        } else {
+            APPEND_FMT(output_buf, offset, "%s%s%s%s",
+                    p->session_header.name,
+                    p->session_header.colon_space,
+                    p->session_header.session_id,
+                    p->session_header.crlf);
+        }
+    }
 
     if (p->user_agent_header.name[0] && p->user_agent_header.agent_string[0])
         APPEND_FMT(output_buf, offset, "%s%s%s%s",
@@ -974,7 +1028,7 @@ int serialize_teardown(const rtsp_teardown_packet_t *p, u8 *output_buf, u32 *out
                    p->user_agent_header.crlf);
 
     // === 5. End CRLF ===
-    APPEND_FMT(output_buf, offset, "%s", p->end_crlf);
+    APPEND_FMT(output_buf, offset, "%s", "\r\n");
 
     *out_len = offset;
     return 0;
@@ -1145,14 +1199,23 @@ int serialize_get_parameter(const rtsp_get_parameter_packet_t *p, u8 *output_buf
                    p->require_header.option_tag,
                    p->require_header.crlf);
 
-    if (p->session_header.name[0] && p->session_header.session_id[0])
-        APPEND_FMT(output_buf, offset, "%s%s%s%s%d%s",
-                   p->session_header.name,
-                   p->session_header.colon_space,
-                   p->session_header.session_id,
-                   p->session_header.semicolon_timeout,
-                   p->session_header.timeout,
-                   p->session_header.crlf);
+    if (p->session_header.name[0] && p->session_header.session_id[0]) {
+        if (p->session_header.semicolon_timeout[0]) {
+            APPEND_FMT(output_buf, offset, "%s%s%s%s%d%s",
+                    p->session_header.name,
+                    p->session_header.colon_space,
+                    p->session_header.session_id,
+                    p->session_header.semicolon_timeout,
+                    p->session_header.timeout,
+                    p->session_header.crlf);
+        } else {
+            APPEND_FMT(output_buf, offset, "%s%s%s%s",
+                    p->session_header.name,
+                    p->session_header.colon_space,
+                    p->session_header.session_id,
+                    p->session_header.crlf);
+        }
+    }
 
     if (p->user_agent_header.name[0] && p->user_agent_header.agent_string[0])
         APPEND_FMT(output_buf, offset, "%s%s%s%s",
@@ -1162,7 +1225,7 @@ int serialize_get_parameter(const rtsp_get_parameter_packet_t *p, u8 *output_buf
                    p->user_agent_header.crlf);
 
     // === 5. End CRLF ===
-    APPEND_FMT(output_buf, offset, "%s", p->end_crlf);
+    APPEND_FMT(output_buf, offset, "%s", "\r\n");
 
     *out_len = offset;
     return 0;
@@ -1274,14 +1337,23 @@ int serialize_set_parameter(const rtsp_set_parameter_packet_t *p, u8 *output_buf
                    p->require_header.option_tag,
                    p->require_header.crlf);
 
-    if (p->session_header.name[0] && p->session_header.session_id[0])
-        APPEND_FMT(output_buf, offset, "%s%s%s%s%d%s",
-                   p->session_header.name,
-                   p->session_header.colon_space,
-                   p->session_header.session_id,
-                   p->session_header.semicolon_timeout,
-                   p->session_header.timeout,
-                   p->session_header.crlf);
+    if (p->session_header.name[0] && p->session_header.session_id[0]) {
+        if (p->session_header.semicolon_timeout[0]) {
+            APPEND_FMT(output_buf, offset, "%s%s%s%s%d%s",
+                    p->session_header.name,
+                    p->session_header.colon_space,
+                    p->session_header.session_id,
+                    p->session_header.semicolon_timeout,
+                    p->session_header.timeout,
+                    p->session_header.crlf);
+        } else {
+            APPEND_FMT(output_buf, offset, "%s%s%s%s",
+                    p->session_header.name,
+                    p->session_header.colon_space,
+                    p->session_header.session_id,
+                    p->session_header.crlf);
+        }
+    }
 
     if (p->user_agent_header.name[0] && p->user_agent_header.agent_string[0])
         APPEND_FMT(output_buf, offset, "%s%s%s%s",
@@ -1326,8 +1398,8 @@ int serialize_set_parameter(const rtsp_set_parameter_packet_t *p, u8 *output_buf
                    p->content_length_header.crlf);
 
     // === 6. End CRLF ===
-    if (p->end_crlf[0])
-        APPEND_FMT(output_buf, offset, "%s", p->end_crlf);
+
+    APPEND_FMT(output_buf, offset, "%s", "\r\n");
 
 
     *out_len = offset;
@@ -1463,14 +1535,23 @@ int serialize_redirect(const rtsp_redirect_packet_t *p, u8 *output_buf, u32 *out
                    p->require_header.crlf);
 
     // === 14. Session ===
-    if (p->session_header.name[0] && p->session_header.session_id[0])
-        APPEND_FMT(output_buf, offset, "%s%s%s%s%d%s",
-                   p->session_header.name,
-                   p->session_header.colon_space,
-                   p->session_header.session_id,
-                   p->session_header.semicolon_timeout,
-                   p->session_header.timeout,
-                   p->session_header.crlf);
+    if (p->session_header.name[0] && p->session_header.session_id[0]) {
+        if (p->session_header.semicolon_timeout[0]) {
+            APPEND_FMT(output_buf, offset, "%s%s%s%s%d%s",
+                    p->session_header.name,
+                    p->session_header.colon_space,
+                    p->session_header.session_id,
+                    p->session_header.semicolon_timeout,
+                    p->session_header.timeout,
+                    p->session_header.crlf);
+        } else {
+            APPEND_FMT(output_buf, offset, "%s%s%s%s",
+                    p->session_header.name,
+                    p->session_header.colon_space,
+                    p->session_header.session_id,
+                    p->session_header.crlf);
+        }
+    }
 
     // === 15. User-Agent ===
     if (p->user_agent_header.name[0] && p->user_agent_header.agent_string[0])
@@ -1481,8 +1562,8 @@ int serialize_redirect(const rtsp_redirect_packet_t *p, u8 *output_buf, u32 *out
                    p->user_agent_header.crlf);
 
     // === 16. Final CRLF ===
-    if (p->end_crlf[0])
-        APPEND_FMT(output_buf, offset, "%s", p->end_crlf);
+
+    APPEND_FMT(output_buf, offset, "%s", "\r\n");
 
     *out_len = offset;
     return 0;
@@ -1594,14 +1675,23 @@ int serialize_announce(const rtsp_announce_packet_t *p, u8 *output_buf, u32 *out
                    p->require_header.option_tag,
                    p->require_header.crlf);
 
-    if (p->session_header.name[0] && p->session_header.session_id[0])
-        APPEND_FMT(output_buf, offset, "%s%s%s%s%d%s",
-                   p->session_header.name,
-                   p->session_header.colon_space,
-                   p->session_header.session_id,
-                   p->session_header.semicolon_timeout,
-                   p->session_header.timeout,
-                   p->session_header.crlf);
+    if (p->session_header.name[0] && p->session_header.session_id[0]) {
+        if (p->session_header.semicolon_timeout[0]) {
+            APPEND_FMT(output_buf, offset, "%s%s%s%s%d%s",
+                    p->session_header.name,
+                    p->session_header.colon_space,
+                    p->session_header.session_id,
+                    p->session_header.semicolon_timeout,
+                    p->session_header.timeout,
+                    p->session_header.crlf);
+        } else {
+            APPEND_FMT(output_buf, offset, "%s%s%s%s",
+                    p->session_header.name,
+                    p->session_header.colon_space,
+                    p->session_header.session_id,
+                    p->session_header.crlf);
+        }
+    }
 
     if (p->user_agent_header.name[0] && p->user_agent_header.agent_string[0])
         APPEND_FMT(output_buf, offset, "%s%s%s%s",
@@ -1670,8 +1760,8 @@ int serialize_announce(const rtsp_announce_packet_t *p, u8 *output_buf, u32 *out
                    p->expires_header.crlf);
 
     // === 6. End CRLF ===
-    if (p->end_crlf[0])
-        APPEND_FMT(output_buf, offset, "%s", p->end_crlf);
+
+    APPEND_FMT(output_buf, offset, "%s", "\r\n");
 
 
     *out_len = offset;
@@ -1784,14 +1874,23 @@ int serialize_record(const rtsp_record_packet_t *p, u8 *output_buf, u32 *out_len
                    p->require_header.option_tag,
                    p->require_header.crlf);
 
-    if (p->session_header.name[0] && p->session_header.session_id[0])
-        APPEND_FMT(output_buf, offset, "%s%s%s%s%d%s",
-                   p->session_header.name,
-                   p->session_header.colon_space,
-                   p->session_header.session_id,
-                   p->session_header.semicolon_timeout,
-                   p->session_header.timeout,
-                   p->session_header.crlf);
+    if (p->session_header.name[0] && p->session_header.session_id[0]) {
+        if (p->session_header.semicolon_timeout[0]) {
+            APPEND_FMT(output_buf, offset, "%s%s%s%s%d%s",
+                    p->session_header.name,
+                    p->session_header.colon_space,
+                    p->session_header.session_id,
+                    p->session_header.semicolon_timeout,
+                    p->session_header.timeout,
+                    p->session_header.crlf);
+        } else {
+            APPEND_FMT(output_buf, offset, "%s%s%s%s",
+                    p->session_header.name,
+                    p->session_header.colon_space,
+                    p->session_header.session_id,
+                    p->session_header.crlf);
+        }
+    }
 
     if (p->user_agent_header.name[0] && p->user_agent_header.agent_string[0])
         APPEND_FMT(output_buf, offset, "%s%s%s%s",
@@ -1833,8 +1932,8 @@ int serialize_record(const rtsp_record_packet_t *p, u8 *output_buf, u32 *out_len
     }
 
     // === 6. End CRLF ===
-    if (p->end_crlf[0])
-        APPEND_FMT(output_buf, offset, "%s", p->end_crlf);
+
+    APPEND_FMT(output_buf, offset, "%s", "\r\n");
 
     *out_len = offset;
     return 0;
