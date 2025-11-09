@@ -62,6 +62,14 @@ static int out_put(u8 *out, u32 cap, u32 *pos, const char *s) {
     *pos += (u32)n;
     return 1;
 }
+static int out_put_raw(u8 *out, u32 cap, u32 *pos, const void *src, size_t n) {
+    if (!src || n == 0) return 1;
+    if (*pos > cap || cap - *pos < n) return 0;
+    memcpy(out + *pos, src, n);
+    *pos += (u32)n;
+    return 1;
+}
+
 static int out_put_if_nonempty(u8 *out, u32 cap, u32 *pos,
                                const char *maybe_space, const char *field) {
     if (!field || !*field) return 1;
@@ -161,6 +169,26 @@ static int reassemble_one(const smtp_packet_t *p, u8 *out, u32 cap, u32 *pos) {
                 }
             }
             return out_put(out,cap,pos,p->pkt.auth.crlf);
+        case SMTP_PKT_BDAT: {
+            if (!out_put(out,cap,pos,p->pkt.bdat.command)) return 0;
+            if (!out_put(out,cap,pos,p->pkt.bdat.space1))  return 0;
+            if (!out_put(out,cap,pos,p->pkt.bdat.size_str))return 0;
+            if (p->pkt.bdat.last_token[0]) {
+                if (!out_put(out,cap,pos,p->pkt.bdat.space2))   return 0;
+                if (!out_put(out,cap,pos,p->pkt.bdat.last_token)) return 0;
+            }
+            if (!out_put(out,cap,pos,p->pkt.bdat.crlf)) return 0;
+
+            if (!out_put_raw(out,cap,pos,p->pkt.bdat.data, p->pkt.bdat.data_len)) return 0;
+            return 1;
+        }
+
+        case SMTP_PKT_DOT:
+            return out_put(out,cap,pos,p->pkt.dot.dot)
+                && out_put(out,cap,pos,p->pkt.dot.crlf);
+                
+        case SMTP_PKT_DATA_BLOCK:
+            return out_put_raw(out, cap, pos, p->pkt.data_block.data, p->pkt.data_block.len);
 
         default:
             return 0;

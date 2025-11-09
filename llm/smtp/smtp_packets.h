@@ -107,6 +107,36 @@ typedef struct {
     char crlf[SMTP_SZ_CRLF];
 } smtp_auth_packet_t;
 
+/* 若还没有这些常量，请加上（或自行选择更合适的值） */
+#ifndef SMTP_SZ_NUM
+#define SMTP_SZ_NUM  16
+#endif
+#ifndef SMTP_SZ_LAST
+#define SMTP_SZ_LAST 8
+#endif
+
+
+typedef struct {
+    char command[SMTP_SZ_CMD];   // "BDAT"
+    char space1[SMTP_SZ_SPACE];
+    char size_str[SMTP_SZ_NUM]; 
+    char space2[SMTP_SZ_SPACE];
+    char last_token[SMTP_SZ_LAST]; 
+    char crlf[SMTP_SZ_CRLF];
+    const char *data;
+    int       data_len;     
+} smtp_bdat_t;
+
+typedef struct {
+    char dot[2];                 // "."
+    char crlf[SMTP_SZ_CRLF];     // "\r\n"
+} smtp_dot_t;
+
+typedef struct {
+    const char *data;
+    int       len;   // 原样字节数（可包含多行的 CRLF）
+} smtp_data_block_t;
+
 typedef enum{
     SMTP_PKT_HELO,
     SMTP_PKT_EHLO,
@@ -121,8 +151,13 @@ typedef enum{
     SMTP_PKT_QUIT,
     SMTP_PKT_STARTTLS,
     SMTP_PKT_AUTH,
+    SMTP_PKT_BDAT,     // RFC 3030 CHUNKING
+    SMTP_PKT_DOT,
+    SMTP_PKT_DATA_BLOCK,
     SMTP_PKT_UNRECOGNIZED
 } smtp_cmd_type_t;
+
+
 
 typedef struct {
     smtp_cmd_type_t cmd_type;
@@ -140,5 +175,8 @@ typedef struct {
         smtp_quit_packet_t quit;
         smtp_starttls_packet_t starttls;
         smtp_auth_packet_t auth;
+        smtp_bdat_t bdat;
+        smtp_dot_t  dot;
+        smtp_data_block_t data_block;
     } pkt;
 } smtp_packet_t;
