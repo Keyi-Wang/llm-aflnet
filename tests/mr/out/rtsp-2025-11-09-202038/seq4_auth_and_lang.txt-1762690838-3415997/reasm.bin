@@ -1,0 +1,44 @@
+OPTIONS rtsp://secure.example.com/protected.sdp RTSP/1.0
+CSeq: 1
+Authorization: Basic YTpi
+User-Agent: LEMUR-FUZZ/1.0
+
+DESCRIBE rtsp://secure.example.com/protected.sdp RTSP/1.0
+CSeq: 2
+Accept: application/sdp
+Accept-Language: fr-CA,en;q=0.8,zh;q=0.5
+Authorization: Basic YTpi
+User-Agent: LEMUR-FUZZ/1.0
+
+SETUP rtsp://secure.example.com/protected.sdp/trackID=0 RTSP/1.0
+CSeq: 3
+Authorization: Basic YTpi
+User-Agent: LEMUR-FUZZ/1.0
+Transport: RTP/AVP;unicast;client_port=6000-6001
+
+PLAY rtsp://secure.example.com/protected.sdp RTSP/1.0
+CSeq: 4
+Via: RTSP/1.0 client2.example.com
+Authorization: Basic YTpi
+Range: npt=5.000-
+Referer: rtsp://secure.example.com/
+Session: SEC00042
+User-Agent: LEMUR-FUZZ/1.0
+
+GET_PARAMETER rtsp://secure.example.com/protected.sdp RTSP/1.0
+CSeq: 5
+Proxy-Require: com.example.featureX
+Require: play.basic
+Session: SEC00042
+User-Agent: LEMUR-FUZZ/1.0
+
+PAUSE rtsp://secure.example.com/protected.sdp RTSP/1.0
+CSeq: 6
+Session: SEC00042
+User-Agent: LEMUR-FUZZ/1.0
+
+TEARDOWN rtsp://secure.example.com/protected.sdp RTSP/1.0
+CSeq: 7
+Session: SEC00042
+User-Agent: LEMUR-FUZZ/1.0
+

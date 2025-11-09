@@ -1,0 +1,27 @@
+ANNOUNCE rtsp://example.com/record/me.sdp RTSP/1.0
+CSeq: 1
+Content-Type: application/sdp
+Content-Length: 0
+User-Agent: LEMUR-FUZZ/1.0
+
+SETUP rtsp://example.com/record/me.sdp/trackID=0 RTSP/1.0
+CSeq: 2
+Transport: RTP/AVP;unicast;client_port=7000-7001
+User-Agent: LEMUR-FUZZ/1.0
+
+RECORD rtsp://example.com/record/me.sdp RTSP/1.0
+CSeq: 3
+Session: REC99999
+Range: npt=now-
+User-Agent: LEMUR-FUZZ/1.0
+
+PAUSE rtsp://example.com/record/me.sdp RTSP/1.0
+CSeq: 4
+Session: REC99999
+User-Agent: LEMUR-FUZZ/1.0
+
+TEARDOWN rtsp://example.com/record/me.sdp RTSP/1.0
+CSeq: 5
+Session: REC99999
+User-Agent: LEMUR-FUZZ/1.0
+

@@ -813,6 +813,8 @@ size_t parse_rtsp_msg(const uint8_t *buf, size_t buf_len,
                             fill_content_length_header(&pkt->get_parameter.content_length_header, value);
                         else if (strcasecmp(name, "Content-Location") == 0)
                             fill_content_location_header(&pkt->get_parameter.content_location_header, value);
+                        else if (strcasecmp(name, "CSeq") == 0)
+                            fill_cseq_header(&pkt->teardown.cseq_header, value);
                         else if (strcasecmp(name, "From") == 0)
                             fill_from_header(&pkt->get_parameter.from_header, value);
                         else if (strcasecmp(name, "Last-Modified") == 0)

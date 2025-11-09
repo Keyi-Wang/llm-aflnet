@@ -65,7 +65,7 @@ int dut_parse(const uint8_t *buf, size_t len, msg_array_t *out_arr) {
 
     // 粗略估计最多消息数：RTSP 报文通常 >64B，这里 len/64 + 4 做上限，至少 8
     size_t cap = len / 64 + 4;
-    if (cap < 8) cap = 8;
+    if (cap < 105) cap = 105;
 
     rtsp_holder_t *holder = (rtsp_holder_t*)calloc(1, sizeof(rtsp_holder_t));
     if (!holder) return -1;

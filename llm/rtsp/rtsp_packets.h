@@ -572,6 +572,7 @@ typedef struct {
     require_header_rtsp_t        require_header;        // optional
     session_header_rtsp_t        session_header;        // optional
     user_agent_header_rtsp_t     user_agent_header;     // optional
+    // cseq_header_rtsp_t           cseq_header;           // mandatory
 
     char end_crlf[RTSP_CRLF_LEN]; // fixed-value: "\r\n"
 } rtsp_get_parameter_packet_t;

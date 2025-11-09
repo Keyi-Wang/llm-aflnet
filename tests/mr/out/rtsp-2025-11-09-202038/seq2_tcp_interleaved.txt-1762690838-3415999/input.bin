@@ -1,0 +1,35 @@
+OPTIONS rtsp://example.com/live.sdp RTSP/1.0
+CSeq: 1
+Via: RTSP/1.0 client.example.com
+User-Agent: LEMUR-FUZZ/1.0
+
+DESCRIBE rtsp://example.com/live.sdp RTSP/1.0
+CSeq: 2
+Accept: application/sdp
+Accept-Language: en, zh;q=0.7
+User-Agent: LEMUR-FUZZ/1.0
+
+SETUP rtsp://example.com/live.sdp/trackID=0 RTSP/1.0
+CSeq: 3
+Transport: RTP/AVP/TCP;unicast;interleaved=0-1
+User-Agent: LEMUR-FUZZ/1.0
+
+PLAY rtsp://example.com/live.sdp RTSP/1.0
+CSeq: 4
+Session: ABCD0001
+Range: npt=10.500-20.000
+Speed: 1.000
+User-Agent: LEMUR-FUZZ/1.0
+
+SET_PARAMETER rtsp://example.com/live.sdp RTSP/1.0
+CSeq: 5
+Session: ABCD0001
+Content-Type: text/parameters
+Content-Length: 0
+User-Agent: LEMUR-FUZZ/1.0
+
+TEARDOWN rtsp://example.com/live.sdp RTSP/1.0
+CSeq: 6
+Session: ABCD0001
+User-Agent: LEMUR-FUZZ/1.0
+

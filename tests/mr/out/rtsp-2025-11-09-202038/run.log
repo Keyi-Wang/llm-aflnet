@@ -1,0 +1,7 @@
+[FAIL] rtsp_mr_test_seeds/seq4_auth_and_lang.txt
+[FAIL] rtsp_mr_test_seeds/seq3_multicast.txt
+[FAIL] rtsp_mr_test_seeds/seq6_redirect.txt
+[FAIL] rtsp_mr_test_seeds/all_sequences_concatenated.bin
+[FAIL] rtsp_mr_test_seeds/seq2_tcp_interleaved.txt
+[FAIL] rtsp_mr_test_seeds/seq5_announce_record.txt
+[FAIL] rtsp_mr_test_seeds/seq1_udp_vod.txt
