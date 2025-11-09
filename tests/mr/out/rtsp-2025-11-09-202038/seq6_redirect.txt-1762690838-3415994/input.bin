@@ -1,7 +1,0 @@
-REDIRECT rtsp://client.example.com/stream RTSP/1.0
-CSeq: 1
-Session: RELOC123
-Require: com.test.redirect
-Referer: rtsp://origin.example.com/old
-User-Agent: LEMUR-FUZZ/1.0
-

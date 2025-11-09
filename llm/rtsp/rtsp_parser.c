@@ -349,18 +349,131 @@ void fill_speed_header(speed_header_rtsp_t *hdr, const char *value) {
 }
 
 /* 35. Transport */
-void fill_transport_header(transport_header_rtsp_t *hdr, const char *value) {
-    strcpy(hdr->name, "Transport");
-    strcpy(hdr->colon_space, ": ");
-    strcpy(hdr->crlf, "\r\n");
+#include <string.h>
+#include <ctype.h>
+#include <stdio.h>
 
-    // 例: "RTP/AVP;unicast;client_port=8000-8001"
-    sscanf(value, "%15[^;];%15[^;];client_port=%15s",
-           hdr->protocol, hdr->cast_mode, hdr->port_range);
+static const char* skip_sp(const char *s) {
+    while (*s == ' ' || *s == '\t') ++s;
+    return s;
+}
+
+static void copy_trim(char *dst, size_t dstsz, const char *beg, size_t len) {
+    if (dstsz == 0) return;
+    // 左右裁剪空白
+    while (len && (beg[0] == ' ' || beg[0] == '\t')) { ++beg; --len; }
+    while (len && (beg[len-1] == ' ' || beg[len-1] == '\t')) { --len; }
+    // 去掉一对包裹引号
+    if (len >= 2 && beg[0] == '"' && beg[len-1] == '"') { ++beg; len -= 2; }
+    size_t cpy = len < (dstsz - 1) ? len : (dstsz - 1);
+    if (cpy) memcpy(dst, beg, cpy);
+    dst[cpy] = '\0';
+}
+
+static int span_ieq(const char *a, size_t alen, const char *b) {
+    size_t blen = strlen(b);
+    if (alen != blen) return 0;
+    for (size_t i = 0; i < alen; ++i) {
+        char ca = a[i], cb = b[i];
+        if (ca >= 'A' && ca <= 'Z') ca = (char)(ca - 'A' + 'a');
+        if (cb >= 'A' && cb <= 'Z') cb = (char)(cb - 'A' + 'a');
+        if (ca != cb) return 0;
+    }
+    return 1;
+}
+
+void fill_transport_header(transport_header_rtsp_t *hdr, const char *value) {
+    if (!hdr) return;
+    // 清零，避免残留
+    memset(hdr, 0, sizeof(*hdr));
+
+    // 固定字段
+    snprintf(hdr->name,        sizeof hdr->name,        "Transport");
+    snprintf(hdr->colon_space, sizeof hdr->colon_space, ": ");
+    snprintf(hdr->crlf,        sizeof hdr->crlf,        "\r\n");
     hdr->semicolon1 = ';';
     hdr->semicolon2 = ';';
-    strcpy(hdr->client_port_prefix, "client_port=");
+
+    if (!value) return;
+
+    // 兼容传入字符串包含 "Transport:" 的情况
+    const char *p = value;
+    if (strncasecmp(p, "Transport:", 10) == 0) {
+        p += 10;
+    }
+    p = skip_sp(p);
+
+    // 逐段按 ';' 切分
+    int got_protocol = 0;
+    int got_cast_mode = 0;
+    int got_kv = 0;
+
+    while (*p) {
+        const char *seg = p;
+        while (*p && *p != ';' && *p != '\r' && *p != '\n') ++p;
+        const char *seg_end = p;
+        size_t seg_len = (size_t)(seg_end - seg);
+
+        // 下一个分号跳过
+        if (*p == ';') ++p;
+        // 去掉纯空白段
+        const char *s = seg; size_t n = seg_len;
+        while (n && (s[0] == ' ' || s[0] == '\t')) { ++s; --n; }
+        while (n && (s[n-1] == ' ' || s[n-1] == '\t')) { --n; }
+        if (n == 0) continue;
+
+        // 1) protocol：第一段
+        if (!got_protocol) {
+            copy_trim(hdr->protocol, sizeof hdr->protocol, s, n);
+            got_protocol = 1;
+            continue;
+        }
+
+        // 2) 如果是无等号段且是 unicast/multicast，就记为 cast_mode（只记一次）
+        const char *eq = memchr(s, '=', n);
+        if (!eq && !got_cast_mode) {
+            if (span_ieq(s, n, "unicast") || span_ieq(s, n, "multicast")) {
+                copy_trim(hdr->cast_mode, sizeof hdr->cast_mode, s, n);
+                got_cast_mode = 1;
+                continue;
+            }
+        }
+
+        // 3) 带等号的参数：抓取**第一个** key=value
+        if (!got_kv && eq) {
+            // key
+            const char *k_beg = s;
+            size_t k_len = (size_t)(eq - s);
+            // value
+            const char *v_beg = eq + 1;
+            size_t v_len = (size_t)(s + n - v_beg);
+
+            // 写 key + '=' 到 client_port_prefix
+            // 先写 key（去空白），再手动补 '='
+            char keybuf[16];
+            copy_trim(keybuf, sizeof keybuf, k_beg, k_len);
+            size_t kl = strlen(keybuf);
+
+            // client_port_prefix 容量是 16
+            if (kl + 1 >= sizeof hdr->client_port_prefix) {
+                // 裁剪，保留 '='
+                kl = sizeof hdr->client_port_prefix - 2;
+            }
+            memcpy(hdr->client_port_prefix, keybuf, kl);
+            hdr->client_port_prefix[kl] = '=';
+            hdr->client_port_prefix[kl + 1] = '\0';
+
+            // 写 value 到 port_range（会去掉两端空白与包裹引号）
+            copy_trim(hdr->port_range, sizeof hdr->port_range, v_beg, v_len);
+
+            got_kv = 1;
+            continue;
+        }
+
+        // 其他参数忽略（如 mode=PLAY, destination=..., ttl=...）
+    }
 }
+
 
 
 /* 37. User-Agent */
@@ -851,6 +964,8 @@ size_t parse_rtsp_msg(const uint8_t *buf, size_t buf_len,
                             fill_content_length_header(&pkt->set_parameter.content_length_header, value);
                         else if (strcasecmp(name, "Content-Type") == 0)
                             fill_content_type_header(&pkt->set_parameter.content_type_header, value);
+                        else if (strcasecmp(name, "CSeq") == 0)
+                            fill_cseq_header(&pkt->teardown.cseq_header, value);
                         else if (strcasecmp(name, "From") == 0)
                             fill_from_header(&pkt->set_parameter.from_header, value);
                         else if (strcasecmp(name, "Proxy-Require") == 0)
@@ -877,6 +992,8 @@ size_t parse_rtsp_msg(const uint8_t *buf, size_t buf_len,
                             fill_bandwidth_header(&pkt->redirect.bandwidth_header, value);
                         else if (strcasecmp(name, "Blocksize") == 0)
                             fill_blocksize_header(&pkt->redirect.blocksize_header, value);
+                        else if (strcasecmp(name, "CSeq") == 0)
+                            fill_cseq_header(&pkt->teardown.cseq_header, value);
                         else if (strcasecmp(name, "From") == 0)
                             fill_from_header(&pkt->redirect.from_header, value);
                         else if (strcasecmp(name, "Proxy-Require") == 0)
@@ -911,6 +1028,8 @@ size_t parse_rtsp_msg(const uint8_t *buf, size_t buf_len,
                             fill_content_length_header(&pkt->announce.content_length_header, value);
                         else if (strcasecmp(name, "Content-Type") == 0)
                             fill_content_type_header(&pkt->announce.content_type_header, value);
+                        else if (strcasecmp(name, "CSeq") == 0)
+                            fill_cseq_header(&pkt->teardown.cseq_header, value);
                         else if (strcasecmp(name, "Expires") == 0)
                             fill_expires_header(&pkt->announce.expires_header, value);
                         else if (strcasecmp(name, "From") == 0)
@@ -939,6 +1058,8 @@ size_t parse_rtsp_msg(const uint8_t *buf, size_t buf_len,
                             fill_bandwidth_header(&pkt->record.bandwidth_header, value);
                         else if (strcasecmp(name, "Blocksize") == 0)
                             fill_blocksize_header(&pkt->record.blocksize_header, value);
+                        else if (strcasecmp(name, "CSeq") == 0)
+                            fill_cseq_header(&pkt->teardown.cseq_header, value);
                         else if (strcasecmp(name, "From") == 0)
                             fill_from_header(&pkt->record.from_header, value);
                         else if (strcasecmp(name, "Proxy-Require") == 0)

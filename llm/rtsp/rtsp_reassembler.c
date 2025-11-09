@@ -1390,7 +1390,7 @@ int serialize_set_parameter(const rtsp_set_parameter_packet_t *p, u8 *output_buf
                    p->content_type_header.sub_type,
                    p->content_type_header.crlf);
 
-    if (p->content_length_header.name[0] && p->content_length_header.length > 0)
+    if (p->content_length_header.name[0] && p->content_length_header.length >= 0)
         APPEND_FMT(output_buf, offset, "%s%s%d%s",
                    p->content_length_header.name,
                    p->content_length_header.colon_space,
@@ -1735,7 +1735,7 @@ int serialize_announce(const rtsp_announce_packet_t *p, u8 *output_buf, u32 *out
                    p->content_type_header.sub_type,
                    p->content_type_header.crlf);
 
-    if (p->content_length_header.name[0] && p->content_length_header.length > 0)
+    if (p->content_length_header.name[0] && p->content_length_header.length >= 0)
         APPEND_FMT(output_buf, offset, "%s%s%d%s",
                    p->content_length_header.name,
                    p->content_length_header.colon_space,
