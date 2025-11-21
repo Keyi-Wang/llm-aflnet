@@ -91,6 +91,8 @@ static long get_pkt_content_length(const sip_packet_t *pkt) {
     case SIP_PKT_ACK:      return parse_cl_value_from_hdr(&pkt->pkt.ack.content_length);
     case SIP_PKT_REGISTER: return parse_cl_value_from_hdr(&pkt->pkt.register_.content_length);
     case SIP_PKT_OPTIONS:  return parse_cl_value_from_hdr(&pkt->pkt.options.content_length);
+    case SIP_PKT_BYE:      return parse_cl_value_from_hdr(&pkt->pkt.bye.content_length);
+    case SIP_PKT_CANCEL:   return parse_cl_value_from_hdr(&pkt->pkt.cancel.content_length);
     default:               return -1; /* BYE/CANCEL 未定义 Content-Length 解析 */
   }
 }
@@ -682,6 +684,7 @@ static void parse_one_header_line(const char *line, size_t n, sip_packet_t *pkt)
       else if (!strcasecmp(hname, "Via"))          { if (p->via_count < SIP_MAX_VIA) parse_via(val, vlen, &p->via[p->via_count++]); }
       else if (!strcasecmp(hname, "Accept-Language")) parse_accept_language(val, vlen, &p->accept_language);
       else if (!strcasecmp(hname, "Authorization")) parse_authorization(val, vlen, &p->authorization);
+      else if (!strcasecmp(hname, "Content-Length")) parse_content_length(val, vlen, &p->content_length);
       else if (!strcasecmp(hname, "Date"))         parse_simple_text_header("Date", val, vlen, p->date.name,sizeof p->date.name, p->date.colon_space,sizeof p->date.colon_space, p->date.rfc1123,sizeof p->date.rfc1123, p->date.crlf,sizeof p->date.crlf);
       else if (!strcasecmp(hname, "Encryption"))   parse_encryption(val, vlen, &p->encryption);
       else if (!strcasecmp(hname, "Hide"))         parse_simple_text_header("Hide", val, vlen, p->hide.name,sizeof p->hide.name, p->hide.colon_space,sizeof p->hide.colon_space, p->hide.value,sizeof p->hide.value, p->hide.crlf,sizeof p->hide.crlf);
@@ -704,6 +707,7 @@ static void parse_one_header_line(const char *line, size_t n, sip_packet_t *pkt)
       else if (!strcasecmp(hname, "Via"))          { if (p->via_count < SIP_MAX_VIA) parse_via(val, vlen, &p->via[p->via_count++]); }
       else if (!strcasecmp(hname, "Accept-Language")) parse_accept_language(val, vlen, &p->accept_language);
       else if (!strcasecmp(hname, "Authorization")) parse_authorization(val, vlen, &p->authorization);
+      else if (!strcasecmp(hname, "Content-Length")) parse_content_length(val, vlen, &p->content_length);
       else if (!strcasecmp(hname, "Date"))         parse_simple_text_header("Date", val, vlen, p->date.name,sizeof p->date.name, p->date.colon_space,sizeof p->date.colon_space, p->date.rfc1123,sizeof p->date.rfc1123, p->date.crlf,sizeof p->date.crlf);
       else if (!strcasecmp(hname, "Encryption"))   parse_encryption(val, vlen, &p->encryption);
       else if (!strcasecmp(hname, "Hide"))         parse_simple_text_header("Hide", val, vlen, p->hide.name,sizeof p->hide.name, p->hide.colon_space,sizeof p->hide.colon_space, p->hide.value,sizeof p->hide.value, p->hide.crlf,sizeof p->hide.crlf);

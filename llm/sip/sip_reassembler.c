@@ -431,6 +431,7 @@ static int emit_bye(const sip_bye_packet_t *p, char *out, size_t cap, size_t *po
   if (emit_accept_lang(&p->accept_language, out, cap, pos)) return -1;
   if (emit_authorization(&p->authorization, out, cap, pos)) return -1;
   if (out_append_hdr_text(p->date.name, p->date.rfc1123, out, cap, pos)) return -1;
+  if (emit_content_length(&p->content_length, out, cap, pos)) return -1;
   if (emit_encryption(&p->encryption, out, cap, pos)) return -1;
   if (out_append_hdr_text(p->hide.name, p->hide.value, out, cap, pos)) return -1;
   if (out_append_hdr_text(p->max_forwards.name, p->max_forwards.hops, out, cap, pos)) return -1;
@@ -463,6 +464,7 @@ static int emit_cancel(const sip_cancel_packet_t *p, char *out, size_t cap, size
 
   if (emit_accept_lang(&p->accept_language, out, cap, pos)) return -1;
   if (emit_authorization(&p->authorization, out, cap, pos)) return -1;
+  if (emit_content_length(&p->content_length, out, cap, pos)) return -1;
   if (out_append_hdr_text(p->date.name, p->date.rfc1123, out, cap, pos)) return -1;
   if (emit_encryption(&p->encryption, out, cap, pos)) return -1;
   if (out_append_hdr_text(p->hide.name, p->hide.value, out, cap, pos)) return -1;
