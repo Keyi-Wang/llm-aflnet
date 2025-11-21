@@ -93,46 +93,69 @@ static void op_bitflip_once(char dst[], size_t cap, const char *orig, uint32_t *
     }
 }
 
+
+static const int k_user_legal_ops[] = {
+    3,  /* op_anonymous          — 常见合法名 */
+    4,  /* op_anon_email         — 合法匿名格式 */
+    6,  /* op_trailing_ws        — 尾随空白 */
+    7,  /* op_quoted             — 引号+空格 */
+    11, /* op_digits             — 纯数字长串 */
+    13, /* op_repeat_orig        — 重复膨胀（保持语法合法） */
+    14  /* op_altcase            — 大小写交替 */
+};
+
+static const int USER_LEGAL_OP_COUNT =
+    (int)(sizeof(k_user_legal_ops) / sizeof(k_user_legal_ops[0]));
+
 /**
- * 对 USER 消息中的 username 字段做充分变异（≥16 种算子）
+ * 对 USER 消息中的 username 字段做充分变异（仅使用“合法”算子）
  * @param pkt  目标 USER 包（就地修改 pkt->username）
  * @param seed 随机种子（相同 seed 可复现）
- * @param op   -1 表示随机选择；>=0 表示使用指定算子编号（0..15）
+ * @param op   -1 表示随机选择；>=0 表示在“合法算子集合”中按索引选择（0..USER_LEGAL_OP_COUNT-1）
  * @return 1 成功，0 失败/参数不合法
  */
 int mutate_user_username(ftp_user_packet_t *pkt, uint32_t seed, int op) {
     if (!pkt) return 0;
 
     /* USER 的 space 应为必有空格，若为空则补上（与协议/解析器一致） */
-    if (pkt->space[0] == '\0') { pkt->space[0] = ' '; pkt->space[1] = '\0'; }
+    if (pkt->space[0] == '\0') {
+        pkt->space[0] = ' ';
+        pkt->space[1] = '\0';
+    }
 
     /* 基于当前用户名作为“原始输入” */
     char orig[FTP_SZ_USERNAME];
     buf_set(orig, sizeof(orig), pkt->username);
 
     uint32_t rng = (seed ? seed : 0xC0FFEEu);
-    const int OPS = 16;
-    if (op < 0 || op >= OPS) op = (int)(xorshift32(&rng) % OPS);
 
-    switch (op) {
-        case 0:  op_empty(pkt->username, FTP_SZ_USERNAME); break;
-        case 1:  op_spaces(pkt->username, FTP_SZ_USERNAME); break;
-        case 2:  op_overlongA(pkt->username, FTP_SZ_USERNAME); break;
+    if (USER_LEGAL_OP_COUNT <= 0) {
+        return 0;  /* 理论上不会发生 */
+    }
+
+    /* 选出真正要用的算子编号（是上面 switch 中的 case 号，而不是 0..N 的顺序号） */
+    int chosen_case;
+    if (op < 0 || op >= USER_LEGAL_OP_COUNT) {
+        /* 随机从合法集合中选一个 */
+        int idx = (int)(xorshift32(&rng) % USER_LEGAL_OP_COUNT);
+        chosen_case = k_user_legal_ops[idx];
+    } else {
+        /* 按调用方指定的合法索引选（0..USER_LEGAL_OP_COUNT-1） */
+        chosen_case = k_user_legal_ops[op];
+    }
+
+    switch (chosen_case) {
         case 3:  op_anonymous(pkt->username, FTP_SZ_USERNAME); break;
         case 4:  op_anon_email(pkt->username, FTP_SZ_USERNAME); break;
-        case 5:  op_pathy(pkt->username, FTP_SZ_USERNAME); break;
         case 6:  op_trailing_ws(pkt->username, FTP_SZ_USERNAME); break;
         case 7:  op_quoted(pkt->username, FTP_SZ_USERNAME); break;
-        case 8:  op_shellmeta(pkt->username, FTP_SZ_USERNAME); break;
-        case 9:  op_pct(pkt->username, FTP_SZ_USERNAME); break;
-        case 10: op_utf8(pkt->username, FTP_SZ_USERNAME); break;
         case 11: op_digits(pkt->username, FTP_SZ_USERNAME); break;
-        case 12: op_crlf_inject(pkt->username, FTP_SZ_USERNAME); break;
         case 13: op_repeat_orig(pkt->username, FTP_SZ_USERNAME, orig); break;
         case 14: op_altcase(pkt->username, FTP_SZ_USERNAME, orig); break;
-        case 15: op_bitflip_once(pkt->username, FTP_SZ_USERNAME, orig, &rng); break;
-        default: return 0;
+        default:
+            return 0; /* 不会走到这里，防御性兜底 */
     }
+
     return 1;
 }
 
@@ -151,54 +174,78 @@ static void op_hexrep(char dst[], size_t cap){                                  
 }
 static void op_path(char d[], size_t c) { buf_set(d, c, "../../etc/passwd"); } /* 13: 路径穿越风格 */
 
+/* 合法 PASS password 变异算子在原 switch 中的 case 编号 */
+static const int k_pass_legal_ops[] = {
+    3,  /* op_common_pwd  */
+    4,  /* op_digits      */
+    5,  /* op_leet        */
+    6,  /* op_pair        */
+    7,  /* op_quotes      */
+    15, /* op_hexrep      */
+    16, /* op_repeat_orig */
+    17  /* op_altcase     */
+};
+
+static const int PASS_LEGAL_OP_COUNT =
+    (int)(sizeof(k_pass_legal_ops) / sizeof(k_pass_legal_ops[0]));
+
 /**
- * 对 PASS 消息的 password 字段进行“充分变异”（≥19 种算子）
+ * 对 PASS 消息的 password 字段进行“充分变异”（仅使用语法合法的算子）
  * - 就地修改 pkt->password；不分配堆内存；自动截断并 '\0' 终止
  * - 若 pkt->space 为空，则补成 " "（与语法一致）
  *
  * @param pkt  PASS 包指针
  * @param seed 随机种子（相同 seed 可复现）
- * @param op   -1 随机选择；>=0 指定算子编号（0..18）
+ * @param op   -1 随机选择；
+ *             >=0 时表示在“合法算子集合”中的索引（0..PASS_LEGAL_OP_COUNT-1）
  * @return 1 成功，0 失败/参数无效
  */
 int mutate_pass_password(ftp_pass_packet_t *pkt, uint32_t seed, int op) {
     if (!pkt) return 0;
 
     /* PASS 命令语法需要一个空格（即使 password 为空也应有 " "） */
-    if (pkt->space[0] == '\0') { pkt->space[0] = ' '; pkt->space[1] = '\0'; }
+    if (pkt->space[0] == '\0') {
+        pkt->space[0] = ' ';
+        pkt->space[1] = '\0';
+    }
 
     /* 备份原始输入，供基于原文的算子使用 */
     char orig[FTP_SZ_PASSWORD];
     buf_set(orig, sizeof(orig), pkt->password);
 
     uint32_t rng = (seed ? seed : 0xBADC0DEu);
-    const int OPS = 19;
-    if (op < 0 || op >= OPS) op = (int)(xorshift32(&rng) % OPS);
 
-    switch (op) {
-        case 0:  op_empty(pkt->password, FTP_SZ_PASSWORD); break;
-        case 1:  op_spaces(pkt->password, FTP_SZ_PASSWORD); break;
-        case 2:  op_overlongA(pkt->password, FTP_SZ_PASSWORD); break;
-        case 3:  op_common_pwd(pkt->password, FTP_SZ_PASSWORD); break;
-        case 4:  op_digits(pkt->password, FTP_SZ_PASSWORD); break;
-        case 5:  op_leet(pkt->password, FTP_SZ_PASSWORD); break;
-        case 6:  op_pair(pkt->password, FTP_SZ_PASSWORD); break;
-        case 7:  op_quotes(pkt->password, FTP_SZ_PASSWORD); break;
-        case 8:  op_escapes(pkt->password, FTP_SZ_PASSWORD); break;
-        case 9:  op_pct(pkt->password, FTP_SZ_PASSWORD); break;
-        case 10: op_utf8(pkt->password, FTP_SZ_PASSWORD); break;
-        case 11: op_fmt(pkt->password, FTP_SZ_PASSWORD); break;
-        case 12: op_sql(pkt->password, FTP_SZ_PASSWORD); break;
-        case 13: op_path(pkt->password, FTP_SZ_PASSWORD); break;
-        case 14: op_crlf(pkt->password, FTP_SZ_PASSWORD); break;
-        case 15: op_hexrep(pkt->password, FTP_SZ_PASSWORD); break;
-        case 16: op_repeat_orig(pkt->password, FTP_SZ_PASSWORD, orig); break;
-        case 17: op_altcase(pkt->password, FTP_SZ_PASSWORD, orig); break;
-        case 18: op_bitflip_once(pkt->password, FTP_SZ_PASSWORD, orig, &rng); break;
-        default: return 0;
+    if (PASS_LEGAL_OP_COUNT <= 0) {
+        return 0;  /* 理论上不会发生，防御性检查 */
     }
+
+    /* 选出真正要用的算子编号（对应原先 switch 中的 case 号） */
+    int chosen_case;
+    if (op < 0 || op >= PASS_LEGAL_OP_COUNT) {
+        /* 随机从合法集合中选一个 */
+        int idx = (int)(xorshift32(&rng) % PASS_LEGAL_OP_COUNT);
+        chosen_case = k_pass_legal_ops[idx];
+    } else {
+        /* 调用方指定合法集合中的第 op 个算子 */
+        chosen_case = k_pass_legal_ops[op];
+    }
+
+    switch (chosen_case) {
+        case 3:  op_common_pwd(pkt->password, FTP_SZ_PASSWORD);              break;
+        case 4:  op_digits(pkt->password, FTP_SZ_PASSWORD);                  break;
+        case 5:  op_leet(pkt->password, FTP_SZ_PASSWORD);                    break;
+        case 6:  op_pair(pkt->password, FTP_SZ_PASSWORD);                    break;
+        case 7:  op_quotes(pkt->password, FTP_SZ_PASSWORD);                  break;
+        case 15: op_hexrep(pkt->password, FTP_SZ_PASSWORD);                  break;
+        case 16: op_repeat_orig(pkt->password, FTP_SZ_PASSWORD, orig);       break;
+        case 17: op_altcase(pkt->password, FTP_SZ_PASSWORD, orig);           break;
+        default:
+            return 0;  /* 不会到这里，兜底 */
+    }
+
     return 1;
 }
+
 
 
 /* ---- 变异算子（覆盖合法与非法场景） ---- */
@@ -211,51 +258,77 @@ static void op_b64(char d[], size_t c)          { buf_set(d, c, "YWNjdF9rZXk6c2V
 static void op_hex(char d[], size_t c)          { d[0]='\0'; for(int i=0;i<128;++i) buf_append_str(d,c,"DE"); } /* 15: HEX 串 */
 static void op_repeat(char d[], size_t c, const char *orig){ d[0]='\0'; if(!orig) orig=""; for(int i=0;i<8;++i) buf_append_str(d,c,orig);} /* 16 */
 
+/* 合法 ACCT account_info 变异算子在原 switch 中的 case 编号 */
+static const int k_acct_legal_ops[] = {
+    3,  /* op_common  */
+    4,  /* op_digits  */
+    5,  /* op_kv      */
+    6,  /* op_csv     */
+    7,  /* op_json    */
+    8,  /* op_xml     */
+    9,  /* op_b64     */
+    15, /* op_hex     */
+    16, /* op_repeat  */
+    17  /* op_altcase */
+};
+
+static const int ACCT_LEGAL_OP_COUNT =
+    (int)(sizeof(k_acct_legal_ops) / sizeof(k_acct_legal_ops[0]));
+
 /**
- * 对 ACCT 的 account_info 字段做充分变异（≥19 种算子）
+ * 对 ACCT 的 account_info 字段做充分变异（仅使用“合法”算子）
  * - 仅修改 pkt->account_info；不改 command/space/crlf
  * - 必要时把 pkt->space 补为 " "
  *
  * @param pkt  ftp_acct_packet_t 指针
  * @param seed 随机种子（相同 seed 可复现）
- * @param op   -1 随机选择；>=0 指定算子编号（0..18）
+ * @param op   -1 随机选择；
+ *             >=0 时表示在“合法算子集合”中的索引（0..ACCT_LEGAL_OP_COUNT-1）
  * @return 1 成功，0 失败/参数错误
  */
 int mutate_acct_account_info(ftp_acct_packet_t *pkt, uint32_t seed, int op){
-    if(!pkt) return 0;
+    if (!pkt) return 0;
 
     /* ACCT 语法需要空格：ACCT <SP> <account-info> */
-    if (pkt->space[0] == '\0') { pkt->space[0]=' '; pkt->space[1]='\0'; }
+    if (pkt->space[0] == '\0') {
+        pkt->space[0] = ' ';
+        pkt->space[1] = '\0';
+    }
 
     /* 基于原始输入的算子需要用到它 */
     char orig[FTP_SZ_ACCOUNT];
     buf_set(orig, sizeof(orig), pkt->account_info);
 
     uint32_t rng = (seed ? seed : 0xACCEBEEFu);
-    const int OPS = 19;
-    if (op < 0 || op >= OPS) op = (int)(xorshift32(&rng) % OPS);
 
-    switch(op){
-        case 0:  op_empty(pkt->account_info, FTP_SZ_ACCOUNT); break;
-        case 1:  op_spaces(pkt->account_info, FTP_SZ_ACCOUNT); break;
-        case 2:  op_overlongA(pkt->account_info, FTP_SZ_ACCOUNT); break;
-        case 3:  op_common(pkt->account_info, FTP_SZ_ACCOUNT); break;
-        case 4:  op_digits(pkt->account_info, FTP_SZ_ACCOUNT); break;
-        case 5:  op_kv(pkt->account_info, FTP_SZ_ACCOUNT); break;
-        case 6:  op_csv(pkt->account_info, FTP_SZ_ACCOUNT); break;
-        case 7:  op_json(pkt->account_info, FTP_SZ_ACCOUNT); break;
-        case 8:  op_xml(pkt->account_info, FTP_SZ_ACCOUNT); break;
-        case 9:  op_b64(pkt->account_info, FTP_SZ_ACCOUNT); break;
-        case 10: op_utf8(pkt->account_info, FTP_SZ_ACCOUNT); break;
-        case 11: op_pct(pkt->account_info, FTP_SZ_ACCOUNT); break;
-        case 12: op_sql(pkt->account_info, FTP_SZ_ACCOUNT); break;
-        case 13: op_path(pkt->account_info, FTP_SZ_ACCOUNT); break;
-        case 14: op_crlf(pkt->account_info, FTP_SZ_ACCOUNT); break;
-        case 15: op_hex(pkt->account_info, FTP_SZ_ACCOUNT); break;
-        case 16: op_repeat(pkt->account_info, FTP_SZ_ACCOUNT, orig); break;
-        case 17: op_altcase(pkt->account_info, FTP_SZ_ACCOUNT, orig); break;
-        case 18: op_bitflip_once(pkt->account_info, FTP_SZ_ACCOUNT, orig, &rng); break;
-        default: return 0;
+    if (ACCT_LEGAL_OP_COUNT <= 0) {
+        return 0; /* 理论上不会发生，防御性检查 */
+    }
+
+    /* 选出真正要用的算子编号（对应原 switch 中的 case 号 0..18） */
+    int chosen_case;
+    if (op < 0 || op >= ACCT_LEGAL_OP_COUNT) {
+        /* 随机从“合法算子集合”中选一个 */
+        int idx = (int)(xorshift32(&rng) % ACCT_LEGAL_OP_COUNT);
+        chosen_case = k_acct_legal_ops[idx];
+    } else {
+        /* 调用方指定合法集合中的第 op 个算子 */
+        chosen_case = k_acct_legal_ops[op];
+    }
+
+    switch (chosen_case) {
+        case 3:  op_common(pkt->account_info, FTP_SZ_ACCOUNT);                break;
+        case 4:  op_digits(pkt->account_info, FTP_SZ_ACCOUNT);                break;
+        case 5:  op_kv(pkt->account_info, FTP_SZ_ACCOUNT);                    break;
+        case 6:  op_csv(pkt->account_info, FTP_SZ_ACCOUNT);                   break;
+        case 7:  op_json(pkt->account_info, FTP_SZ_ACCOUNT);                  break;
+        case 8:  op_xml(pkt->account_info, FTP_SZ_ACCOUNT);                   break;
+        case 9:  op_b64(pkt->account_info, FTP_SZ_ACCOUNT);                   break;
+        case 15: op_hex(pkt->account_info, FTP_SZ_ACCOUNT);                   break;
+        case 16: op_repeat(pkt->account_info, FTP_SZ_ACCOUNT, orig);          break;
+        case 17: op_altcase(pkt->account_info, FTP_SZ_ACCOUNT, orig);         break;
+        default:
+            return 0; /* 不会走到这里，兜底 */
     }
     return 1;
 }
@@ -280,55 +353,88 @@ static void op_hex_dirs(char d[], size_t c){ buf_set(d,c,"/DEAD/BEEF/C0DE"); }  
 static void op_mixed_slashes(char d[], size_t c){ buf_set(d,c,"/a\\b/c\\d"); }                   /* 17: 混合分隔符 */
 static void op_dup_slashes(char d[], size_t c){ buf_set(d,c,"/a////b///c"); }                    /* 19: 重复斜杠 */
 
+/* 合法 CWD pathname 变异算子在原 switch 中的 case 编号 */
+static const int k_cwd_legal_ops[] = {
+    1,  /* op_root           */
+    2,  /* op_many_slash     */
+    3,  /* op_dot            */
+    4,  /* op_dotdot         */
+    6,  /* op_dot_segments   */
+    7,  /* op_windows_sep    */
+    8,  /* op_spacey         */
+    9,  /* op_glob           */
+    11, /* op_urlish         */
+    12, /* op_trailing_dots  */
+    15, /* op_longA          */
+    16, /* op_hex_dirs       */
+    17, /* op_mixed_slashes  */
+    19, /* op_dup_slashes    */
+    20, /* op_repeat_orig    */
+    21  /* op_altcase        */
+};
+
+static const int CWD_LEGAL_OP_COUNT =
+    (int)(sizeof(k_cwd_legal_ops) / sizeof(k_cwd_legal_ops[0]));
+
 /**
- * 对 CWD 的 pathname 字段做“充分变异”（≥23 种算子）
+ * 对 CWD 的 pathname 字段做“充分变异”（仅使用合法算子）
  * - 就地修改 pkt->pathname；若 pkt->space 为空则补成 " "
  * - 无堆分配，写入自动截断并 '\0' 终止
  *
  * @param pkt  ftp_cwd_packet_t*
  * @param seed 随机种子（相同 seed 可复现）
- * @param op   -1=随机选择；>=0 指定算子编号（0..22）
+ * @param op   -1=随机选择；
+ *             >=0 表示在“合法算子集合”中的索引（0..CWD_LEGAL_OP_COUNT-1）
  * @return 1 成功；0 失败/参数非法
  */
 int mutate_cwd_pathname(ftp_cwd_packet_t *pkt, uint32_t seed, int op){
-    if(!pkt) return 0;
-    if(pkt->space[0]=='\0'){ pkt->space[0]=' '; pkt->space[1]='\0'; }
+    if (!pkt) return 0;
+    if (pkt->space[0] == '\0') {
+        pkt->space[0] = ' ';
+        pkt->space[1] = '\0';
+    }
 
     char orig[FTP_SZ_PATH];
     buf_set(orig, sizeof(orig), pkt->pathname);
 
-    uint32_t rng = (seed?seed:0xACCEBEEFu);
-    const int OPS = 23;
-    if(op < 0 || op >= OPS) op = (int)(xorshift32(&rng) % OPS);
+    uint32_t rng = (seed ? seed : 0xACCEBEEFu);
 
-    switch(op){
-        case 0:  op_empty(pkt->pathname, FTP_SZ_PATH); break;
-        case 1:  op_root(pkt->pathname, FTP_SZ_PATH); break;
-        case 2:  op_many_slash(pkt->pathname, FTP_SZ_PATH); break;
-        case 3:  op_dot(pkt->pathname, FTP_SZ_PATH); break;
-        case 4:  op_dotdot(pkt->pathname, FTP_SZ_PATH); break;
-        case 5:  op_traversal(pkt->pathname, FTP_SZ_PATH); break;
-        case 6:  op_dot_segments(pkt->pathname, FTP_SZ_PATH); break;
-        case 7:  op_windows_sep(pkt->pathname, FTP_SZ_PATH); break;
-        case 8:  op_spacey(pkt->pathname, FTP_SZ_PATH); break;
-        case 9:  op_glob(pkt->pathname, FTP_SZ_PATH); break;
-        case 10: op_pct(pkt->pathname, FTP_SZ_PATH); break;
-        case 11: op_urlish(pkt->pathname, FTP_SZ_PATH); break;
-        case 12: op_trailing_dots(pkt->pathname, FTP_SZ_PATH); break;
-        case 13: op_device_name(pkt->pathname, FTP_SZ_PATH); break;
-        case 14: op_utf8(pkt->pathname, FTP_SZ_PATH); break;
-        case 15: op_longA(pkt->pathname, FTP_SZ_PATH); break;
-        case 16: op_hex_dirs(pkt->pathname, FTP_SZ_PATH); break;
-        case 17: op_mixed_slashes(pkt->pathname, FTP_SZ_PATH); break;
-        case 18: op_crlf_inject(pkt->pathname, FTP_SZ_PATH); break;
-        case 19: op_dup_slashes(pkt->pathname, FTP_SZ_PATH); break;
-        case 20: op_repeat_orig(pkt->pathname, FTP_SZ_PATH, orig); break;
-        case 21: op_altcase(pkt->pathname, FTP_SZ_PATH, orig); break;
-        case 22: op_bitflip_once(pkt->pathname, FTP_SZ_PATH, orig, &rng); break;
-        default: return 0;
+    if (CWD_LEGAL_OP_COUNT <= 0) {
+        return 0;  /* 防御性检查 */
+    }
+
+    /* 从合法算子集合中选出真正要用的 case 编号 */
+    int chosen_case;
+    if (op < 0 || op >= CWD_LEGAL_OP_COUNT) {
+        int idx = (int)(xorshift32(&rng) % CWD_LEGAL_OP_COUNT);
+        chosen_case = k_cwd_legal_ops[idx];
+    } else {
+        chosen_case = k_cwd_legal_ops[op];
+    }
+
+    switch (chosen_case) {
+        case 1:  op_root(pkt->pathname, FTP_SZ_PATH);                break;
+        case 2:  op_many_slash(pkt->pathname, FTP_SZ_PATH);          break;
+        case 3:  op_dot(pkt->pathname, FTP_SZ_PATH);                 break;
+        case 4:  op_dotdot(pkt->pathname, FTP_SZ_PATH);              break;
+        case 6:  op_dot_segments(pkt->pathname, FTP_SZ_PATH);        break;
+        case 7:  op_windows_sep(pkt->pathname, FTP_SZ_PATH);         break;
+        case 8:  op_spacey(pkt->pathname, FTP_SZ_PATH);              break;
+        case 9:  op_glob(pkt->pathname, FTP_SZ_PATH);                break;
+        case 11: op_urlish(pkt->pathname, FTP_SZ_PATH);              break;
+        case 12: op_trailing_dots(pkt->pathname, FTP_SZ_PATH);       break;
+        case 15: op_longA(pkt->pathname, FTP_SZ_PATH);               break;
+        case 16: op_hex_dirs(pkt->pathname, FTP_SZ_PATH);            break;
+        case 17: op_mixed_slashes(pkt->pathname, FTP_SZ_PATH);       break;
+        case 19: op_dup_slashes(pkt->pathname, FTP_SZ_PATH);         break;
+        case 20: op_repeat_orig(pkt->pathname, FTP_SZ_PATH, orig);   break;
+        case 21: op_altcase(pkt->pathname, FTP_SZ_PATH, orig);       break;
+        default:
+            return 0;   /* 理论上不会到这里 */
     }
     return 1;
 }
+
 
 
 /* ====== 变异算子（涵盖合法/非法/边界） ====== */
@@ -342,55 +448,90 @@ static void op_opts(char d[], size_t c){ buf_set(d,c,"/mnt/point;opts=rw,noatime
 static void op_mixed(char d[], size_t c){ buf_set(d,c,"/a\\b/c\\d"); }                         /* 18: 混合分隔符 */
 static void op_device_names(char d[], size_t c){ buf_set(d,c,"CON/NUL/AUX"); }                 /* 19: 设备名片段 */ 
 
+/* 合法 SMNT pathname 变异算子在原 switch 中的 case 编号 */
+static const int k_smnt_legal_ops[] = {
+    1,  /* op_root         — "/" */
+    2,  /* op_dev          — 设备路径（如 /dev/...） */
+    3,  /* op_many_slash   — 多重斜杠 */
+    4,  /* op_dot          — "." */
+    5,  /* op_dotdot       — ".." */
+    7,  /* op_dot_segments — 各种 dot-segments 路径 */
+    8,  /* op_win_drive    — Windows 盘符路径 C:\... */
+    9,  /* op_unc          — UNC 路径 \\srv\share */
+    10, /* op_nfs          — NFS 风格 srv:/export */
+    11, /* op_smb_url      — smb://... */
+    12, /* op_file_url     — file://... */
+    13, /* op_spacey       — 含空格路径 */
+    15, /* op_opts         — 携带选项的路径 */
+    17, /* op_longA        — 很长但合法的 ASCII 路径 */
+    18, /* op_mixed        — 混合分隔符等合法变体 */
+    21, /* op_hex_dirs     — 十六进制目录段 */
+    22, /* op_dup_slashes  — 重复斜杠 */
+    23, /* op_repeat_orig  — 原路径重复膨胀 */
+    24  /* op_altcase      — 大小写交替 */
+};
+
+static const int SMNT_LEGAL_OP_COUNT =
+    (int)(sizeof(k_smnt_legal_ops) / sizeof(k_smnt_legal_ops[0]));
+
 /**
- * 对 SMNT 的 pathname 字段进行充分变异（≥26 种算子）
+ * 对 SMNT 的 pathname 字段进行充分变异（仅使用“合法”算子）
  * - 就地修改 pkt->pathname；若 pkt->space 为空则补成 " "
  * - 无堆分配；自动截断并 '\0' 终止
  *
  * @param pkt  ftp_smnt_packet_t*
  * @param seed 随机种子（相同 seed 可复现）
- * @param op   -1=随机选择；>=0 指定算子编号（0..25）
+ * @param op   -1=随机选择；
+ *             >=0 表示在“合法算子集合”中的索引（0..SMNT_LEGAL_OP_COUNT-1）
  * @return 1 成功；0 失败/参数非法
  */
 int mutate_smnt_pathname(ftp_smnt_packet_t *pkt, uint32_t seed, int op){
-    if(!pkt) return 0;
-    if(pkt->space[0]=='\0'){ pkt->space[0]=' '; pkt->space[1]='\0'; }
+    if (!pkt) return 0;
+    if (pkt->space[0] == '\0') {
+        pkt->space[0] = ' ';
+        pkt->space[1] = '\0';
+    }
 
     char orig[FTP_SZ_PATH];
     buf_set(orig, sizeof(orig), pkt->pathname);
 
-    uint32_t rng = (seed?seed:0xACCEBEEFu);
-    const int OPS = 26;
-    if(op < 0 || op >= OPS) op = (int)(xorshift32(&rng) % OPS);
+    uint32_t rng = (seed ? seed : 0xACCEBEEFu);
 
-    switch(op){
-        case 0:  op_empty(pkt->pathname, FTP_SZ_PATH); break;
-        case 1:  op_root(pkt->pathname, FTP_SZ_PATH); break;
-        case 2:  op_dev(pkt->pathname, FTP_SZ_PATH); break;
-        case 3:  op_many_slash(pkt->pathname, FTP_SZ_PATH); break;
-        case 4:  op_dot(pkt->pathname, FTP_SZ_PATH); break;
-        case 5:  op_dotdot(pkt->pathname, FTP_SZ_PATH); break;
-        case 6:  op_traversal(pkt->pathname, FTP_SZ_PATH); break;
-        case 7:  op_dot_segments(pkt->pathname, FTP_SZ_PATH); break;
-        case 8:  op_win_drive(pkt->pathname, FTP_SZ_PATH); break;
-        case 9:  op_unc(pkt->pathname, FTP_SZ_PATH); break;
-        case 10: op_nfs(pkt->pathname, FTP_SZ_PATH); break;
-        case 11: op_smb_url(pkt->pathname, FTP_SZ_PATH); break;
-        case 12: op_file_url(pkt->pathname, FTP_SZ_PATH); break;
-        case 13: op_spacey(pkt->pathname, FTP_SZ_PATH); break;
-        case 14: op_pct(pkt->pathname, FTP_SZ_PATH); break;
-        case 15: op_opts(pkt->pathname, FTP_SZ_PATH); break;
-        case 16: op_utf8(pkt->pathname, FTP_SZ_PATH); break;
-        case 17: op_longA(pkt->pathname, FTP_SZ_PATH); break;
-        case 18: op_mixed(pkt->pathname, FTP_SZ_PATH); break;
-        case 19: op_device_names(pkt->pathname, FTP_SZ_PATH); break;
-        case 20: op_crlf_inject(pkt->pathname, FTP_SZ_PATH); break;
-        case 21: op_hex_dirs(pkt->pathname, FTP_SZ_PATH); break;
-        case 22: op_dup_slashes(pkt->pathname, FTP_SZ_PATH); break;
+    if (SMNT_LEGAL_OP_COUNT <= 0) {
+        return 0;  /* 防御性检查 */
+    }
+
+    /* 从合法算子集合中选出真正使用的 case 编号 */
+    int chosen_case;
+    if (op < 0 || op >= SMNT_LEGAL_OP_COUNT) {
+        int idx = (int)(xorshift32(&rng) % SMNT_LEGAL_OP_COUNT);
+        chosen_case = k_smnt_legal_ops[idx];
+    } else {
+        chosen_case = k_smnt_legal_ops[op];
+    }
+
+    switch (chosen_case) {
+        case 1:  op_root(pkt->pathname, FTP_SZ_PATH);              break;
+        case 2:  op_dev(pkt->pathname, FTP_SZ_PATH);               break;
+        case 3:  op_many_slash(pkt->pathname, FTP_SZ_PATH);        break;
+        case 4:  op_dot(pkt->pathname, FTP_SZ_PATH);               break;
+        case 5:  op_dotdot(pkt->pathname, FTP_SZ_PATH);            break;
+        case 7:  op_dot_segments(pkt->pathname, FTP_SZ_PATH);      break;
+        case 8:  op_win_drive(pkt->pathname, FTP_SZ_PATH);         break;
+        case 9:  op_unc(pkt->pathname, FTP_SZ_PATH);               break;
+        case 10: op_nfs(pkt->pathname, FTP_SZ_PATH);               break;
+        case 11: op_smb_url(pkt->pathname, FTP_SZ_PATH);           break;
+        case 12: op_file_url(pkt->pathname, FTP_SZ_PATH);          break;
+        case 13: op_spacey(pkt->pathname, FTP_SZ_PATH);            break;
+        case 15: op_opts(pkt->pathname, FTP_SZ_PATH);              break;
+        case 17: op_longA(pkt->pathname, FTP_SZ_PATH);             break;
+        case 18: op_mixed(pkt->pathname, FTP_SZ_PATH);             break;
+        case 21: op_hex_dirs(pkt->pathname, FTP_SZ_PATH);          break;
+        case 22: op_dup_slashes(pkt->pathname, FTP_SZ_PATH);       break;
         case 23: op_repeat_orig(pkt->pathname, FTP_SZ_PATH, orig); break;
-        case 24: op_altcase(pkt->pathname, FTP_SZ_PATH, orig); break;
-        case 25: op_bitflip_once(pkt->pathname, FTP_SZ_PATH, orig, &rng); break;
-        default: return 0;
+        case 24: op_altcase(pkt->pathname, FTP_SZ_PATH, orig);     break;
+        default:
+            return 0;  /* 理论上不会到这里 */
     }
     return 1;
 }
@@ -438,59 +579,71 @@ static void op_port_65535(char d[], size_t c){ fmt_hostport(d,c,127,0,0,1,255,25
 static void op_leading_plus(char d[], size_t c){ buf_set(d,c,"+127,+0,+0,+1,+0,+21"); }                /* 26 前导+号 */
 static void op_huge_numbers(char d[], size_t c){ buf_set(d,c,"9999,9999,9999,9999,9999,9999"); }       /* 27 超大数字串 */
 
+/* 合法 PORT host_port_str 变异算子在原 switch 中的 case 编号 */
+static const int k_port_legal_ops[] = {
+    2,  /* op_valid_localhost_21      — 合法：127.0.0.1,0,21 */
+    3,  /* op_valid_private_50000     — 合法：私网 + 50000 */
+    4,  /* op_all_zero                — 合法：0,0,0,0,0,0 */
+    5,  /* op_broadcast               — 合法：255,255,255,255,... */
+    11, /* op_spaces_around           — 合法：带空白的 6 段数字 */
+    12, /* op_tabs_around             — 合法：带 TAB 的 6 段数字 */
+    23, /* op_random_valid            — 合法：随机生成合法 host,port */
+    24, /* op_port_zero               — 合法：端口 0 */
+    25  /* op_port_65535              — 合法：端口 65535 */
+};
+
+static const int PORT_LEGAL_OP_COUNT =
+    (int)(sizeof(k_port_legal_ops) / sizeof(k_port_legal_ops[0]));
+
 /**
- * 对 PORT 的 host_port_str 字段进行充分变异（≥28 种算子）
+ * 对 PORT 的 host_port_str 字段进行充分变异（仅使用“合法”算子）
  * - 就地修改 pkt->host_port_str；若 pkt->space 为空则补成 " "
  * - 无堆分配；写入自动截断并 '\0' 终止
  *
  * @param pkt  ftp_port_packet_t*
  * @param seed 随机种子（相同 seed 可复现）
- * @param op   -1=随机选择；>=0 指定算子编号（0..27）
+ * @param op   -1=随机选择；
+ *             >=0 表示在“合法算子集合”中的索引（0..PORT_LEGAL_OP_COUNT-1）
  * @return 1 成功；0 失败/参数非法
  */
 int mutate_port_host_port_str(ftp_port_packet_t *pkt, uint32_t seed, int op){
-    if(!pkt) return 0;
+    if (!pkt) return 0;
 
     /* PORT 语法需要空格：PORT <SP> h1,h2,h3,h4,p1,p2 */
-    if(pkt->space[0]=='\0'){ pkt->space[0]=' '; pkt->space[1]='\0'; }
-
-    uint32_t rng = (seed?seed:0xACCEBEEFu); /* 任意非零默认种子（编译器会解析为十六进制常量的前缀 0xP? 非法，这里换成 0xA1B2C3D4）*/
-    rng = (seed?seed:0xA1B2C3D4u);
-
-    const int OPS = 28;
-    if(op < 0 || op >= OPS) op = (int)(xorshift32(&rng) % OPS);
-
-    switch(op){
-        case 0:  op_empty(pkt->host_port_str, FTP_SZ_HOSTPORT); break;
-        case 1:  op_spaces_commas(pkt->host_port_str, FTP_SZ_HOSTPORT); break;
-        case 2:  op_valid_localhost_21(pkt->host_port_str, FTP_SZ_HOSTPORT); break;
-        case 3:  op_valid_private_50000(pkt->host_port_str, FTP_SZ_HOSTPORT); break;
-        case 4:  op_all_zero(pkt->host_port_str, FTP_SZ_HOSTPORT); break;
-        case 5:  op_broadcast(pkt->host_port_str, FTP_SZ_HOSTPORT); break;
-        case 6:  op_over255(pkt->host_port_str, FTP_SZ_HOSTPORT); break;
-        case 7:  op_negative(pkt->host_port_str, FTP_SZ_HOSTPORT); break;
-        case 8:  op_short_fields(pkt->host_port_str, FTP_SZ_HOSTPORT); break;
-        case 9:  op_many_fields(pkt->host_port_str, FTP_SZ_HOSTPORT); break;
-        case 10: op_non_numeric(pkt->host_port_str, FTP_SZ_HOSTPORT); break;
-        case 11: op_spaces_around(pkt->host_port_str, FTP_SZ_HOSTPORT); break;
-        case 12: op_tabs_around(pkt->host_port_str, FTP_SZ_HOSTPORT); break;
-        case 13: op_hex_numbers(pkt->host_port_str, FTP_SZ_HOSTPORT); break;
-        case 14: op_octal_numbers(pkt->host_port_str, FTP_SZ_HOSTPORT); break;
-        case 15: op_floats(pkt->host_port_str, FTP_SZ_HOSTPORT); break;
-        case 16: op_dot_ip_mix(pkt->host_port_str, FTP_SZ_HOSTPORT); break;
-        case 17: op_percent_encoded(pkt->host_port_str, FTP_SZ_HOSTPORT); break;
-        case 18: op_crlf_inject(pkt->host_port_str, FTP_SZ_HOSTPORT); break;
-        case 19: op_trailing_comma(pkt->host_port_str, FTP_SZ_HOSTPORT); break;
-        case 20: op_empty_components(pkt->host_port_str, FTP_SZ_HOSTPORT); break;
-        case 21: op_semicolons(pkt->host_port_str, FTP_SZ_HOSTPORT); break;
-        case 22: op_slashes(pkt->host_port_str, FTP_SZ_HOSTPORT); break;
-        case 23: op_random_valid(pkt->host_port_str, FTP_SZ_HOSTPORT, &rng); break;
-        case 24: op_port_zero(pkt->host_port_str, FTP_SZ_HOSTPORT); break;
-        case 25: op_port_65535(pkt->host_port_str, FTP_SZ_HOSTPORT); break;
-        case 26: op_leading_plus(pkt->host_port_str, FTP_SZ_HOSTPORT); break;
-        case 27: op_huge_numbers(pkt->host_port_str, FTP_SZ_HOSTPORT); break;
-        default: return 0;
+    if (pkt->space[0] == '\0') {
+        pkt->space[0] = ' ';
+        pkt->space[1] = '\0';
     }
+
+    uint32_t rng = (seed ? seed : 0xA1B2C3D4u); /* 任意非零默认种子 */
+
+    if (PORT_LEGAL_OP_COUNT <= 0) {
+        return 0;
+    }
+
+    /* 从合法算子集合中选出真正使用的 case 编号 */
+    int chosen_case;
+    if (op < 0 || op >= PORT_LEGAL_OP_COUNT) {
+        int idx = (int)(xorshift32(&rng) % PORT_LEGAL_OP_COUNT);
+        chosen_case = k_port_legal_ops[idx];
+    } else {
+        chosen_case = k_port_legal_ops[op];
+    }
+
+    switch (chosen_case) {
+        case 2:  op_valid_localhost_21(pkt->host_port_str, FTP_SZ_HOSTPORT);          break;
+        case 3:  op_valid_private_50000(pkt->host_port_str, FTP_SZ_HOSTPORT);         break;
+        case 4:  op_all_zero(pkt->host_port_str, FTP_SZ_HOSTPORT);                    break;
+        case 5:  op_broadcast(pkt->host_port_str, FTP_SZ_HOSTPORT);                   break;
+        case 11: op_spaces_around(pkt->host_port_str, FTP_SZ_HOSTPORT);               break;
+        case 12: op_tabs_around(pkt->host_port_str, FTP_SZ_HOSTPORT);                 break;
+        case 23: op_random_valid(pkt->host_port_str, FTP_SZ_HOSTPORT, &rng);          break;
+        case 24: op_port_zero(pkt->host_port_str, FTP_SZ_HOSTPORT);                   break;
+        case 25: op_port_65535(pkt->host_port_str, FTP_SZ_HOSTPORT);                  break;
+        default:
+            return 0; /* 理论上不会到这里 */
+    }
+
     return 1;
 }
 
@@ -514,68 +667,70 @@ static size_t cstrnlen_(const char *s, size_t maxn){
     size_t i=0; if(!s) return 0; while(i<maxn && s[i]) ++i; return i;
 }
 
+/* 合法 TYPE type_code 变异算子在原 switch 中的 case 编号 */
+static const int k_type_legal_ops[] = {
+    0,  /* TYPE A     */
+    1,  /* TYPE I     */
+    2,  /* TYPE E N   */
+    3,  /* TYPE A N   */
+    4,  /* TYPE A T   */
+    5,  /* TYPE A C   */
+    6,  /* TYPE L 8   */
+    7   /* TYPE L 16  */
+};
+
+static const int TYPE_LEGAL_OP_COUNT =
+    (int)(sizeof(k_type_legal_ops) / sizeof(k_type_legal_ops[0]));
+
 /**
- * 对 TYPE 的 type_code 字段做充分变异（≥20 种）
+ * 对 TYPE 的 type_code 字段做充分变异（仅使用“合法”取值）
  * - 就地修改 pkt->type_code；必要时同步 space2/format_control；
  * - 始终确保 space1 = " "（满足语法 "TYPE <SP> ..."）
  *
  * @param pkt  ftp_type_packet_t*
  * @param seed 随机种子（相同 seed 可复现）
- * @param op   -1 随机；>=0 指定算子编号（0..21）
+ * @param op   -1 随机；>=0 表示在“合法算子集合”中的索引（0..TYPE_LEGAL_OP_COUNT-1）
  * @return 1 成功；0 失败
  */
 int mutate_type_type_code(ftp_type_packet_t *pkt, uint32_t seed, int op){
-    if(!pkt) return 0;
+    if (!pkt) return 0;
     set_space1(pkt);
 
-    /* 备份原值（供部分算子参考） */
-    char orig_type[FTP_SZ_TYPE];      buf_set(orig_type, sizeof(orig_type), pkt->type_code);
+    /* 备份原值（目前只给 bitflip 用，但我们已经不再使用它了，可以保留以防以后扩展） */
+    char orig_type[FTP_SZ_TYPE];
+    buf_set(orig_type, sizeof(orig_type), pkt->type_code);
 
-    uint32_t rng = (seed?seed:0xACCEBEEFu);
-    const int OPS = 22;
-    if(op < 0 || op >= OPS) op = (int)(xorshift32(&rng) % OPS);
+    uint32_t rng = (seed ? seed : 0xACCEBEEFu);
 
-    switch(op){
-        /* —— 合法取值 —— */
-        case 0:  set_opt(pkt, "A", NULL);                 break;           /* TYPE A */
-        case 1:  set_opt(pkt, "I", NULL);                 break;           /* TYPE I */
-        case 2:  set_opt(pkt, "E", "N");                  break;           /* TYPE E N */
-        case 3:  set_opt(pkt, "A", "N");                  break;           /* TYPE A N (Non-print) */
-        case 4:  set_opt(pkt, "A", "T");                  break;           /* TYPE A T (Telnet) */
-        case 5:  set_opt(pkt, "A", "C");                  break;           /* TYPE A C (ASA Control) */
-        case 6:  set_opt(pkt, "L", "8");                  break;           /* TYPE L 8 (常见) */
-        case 7:  set_opt(pkt, "L", "16");                 break;           /* TYPE L 16 (实现相关) */
+    if (TYPE_LEGAL_OP_COUNT <= 0)
+        return 0;
 
-        /* —— 边界/非法/鲁棒性 —— */
-        case 8:  set_opt(pkt, "", NULL);                  break;           /* 空 type_code（非法） */
-        case 9:  set_opt(pkt, "a", NULL);                 break;           /* 小写（大小写容忍性） */
-        case 10: set_opt(pkt, "Z", NULL);                 break;           /* 未知字母 */
-        case 11: set_opt(pkt, "123", NULL);               break;           /* 数字串 */
-        case 12: set_opt(pkt, "L", "0");                  break;           /* L 0（无效大小） */
-        case 13: set_opt(pkt, "L", "-1");                 break;           /* L -1（负数） */
-        case 14: set_opt(pkt, "L", "65535");              break;           /* L 超大数 */
-        case 15: set_opt(pkt, "A N", NULL);               break;           /* 把空格放进 type_code 本身 */
-        case 16: set_opt(pkt, "I\r\nNOOP", NULL);         break;           /* CRLF 注入 */
-        case 17: set_opt(pkt, "0x49", NULL);              break;           /* 十六进制风格 */
-        case 18: set_opt(pkt, "Ａ", NULL);                break;           /* 全角 A（UTF-8 多字节） */
-        case 19: {                                                      /* 超长填满 */
-            buf_fill_repeat(pkt->type_code, sizeof(pkt->type_code), 'A', sizeof(pkt->type_code)?sizeof(pkt->type_code)-1:0);
-            pkt->space2[0]='\0'; pkt->format_control[0]='\0';
-            break;
-        }
-        case 20: {                                                      /* 随机 bitflip 一处 */
-            char tmp[FTP_SZ_TYPE]; buf_set(tmp, sizeof(tmp), orig_type[0]?orig_type:"A");
-            size_t n = cstrnlen_(tmp, sizeof(tmp)); if(n==0){ set_opt(pkt, "A", NULL); break; }
-            size_t idx = xorshift32(&rng) % n; unsigned flips=(xorshift32(&rng)%7)+1;
-            for(unsigned k=0;k<flips;++k){ tmp[idx] ^= (char)(1u << (xorshift32(&rng)%8)); }
-            set_opt(pkt, tmp, NULL);
-            break;
-        }
-        case 21: set_opt(pkt, "E", "X");                  break;           /* E X（未知 format-control） */
-        default: return 0;
+    /* 从合法集合中选出实际要用的 case 编号 */
+    int chosen_case;
+    if (op < 0 || op >= TYPE_LEGAL_OP_COUNT) {
+        int idx = (int)(xorshift32(&rng) % TYPE_LEGAL_OP_COUNT);
+        chosen_case = k_type_legal_ops[idx];
+    } else {
+        chosen_case = k_type_legal_ops[op];
     }
+
+    switch (chosen_case) {
+        /* —— 合法取值 —— */
+        case 0:  set_opt(pkt, "A",  NULL);  break;   /* TYPE A     */
+        case 1:  set_opt(pkt, "I",  NULL);  break;   /* TYPE I     */
+        case 2:  set_opt(pkt, "E",  "N");   break;   /* TYPE E N   */
+        case 3:  set_opt(pkt, "A",  "N");   break;   /* TYPE A N   */
+        case 4:  set_opt(pkt, "A",  "T");   break;   /* TYPE A T   */
+        case 5:  set_opt(pkt, "A",  "C");   break;   /* TYPE A C   */
+        case 6:  set_opt(pkt, "L",  "8");   break;   /* TYPE L 8   */
+        case 7:  set_opt(pkt, "L",  "16");  break;   /* TYPE L 16  */
+        default:
+            return 0;  /* 理论上不会到这里 */
+    }
+
     return 1;
 }
+
 
 /* —— 基本操作 —— */
 static inline void ensure_space1(ftp_type_packet_t *pkt){
@@ -605,436 +760,495 @@ void delete_type_format_control(ftp_type_packet_t *pkt){
     set_fc(pkt, "");  /* 清空，同时 space2 也清空 */
 }
 
+/* 合法 format_control 变异算子在原 switch 中的 case 编号 */
+static const int k_type_fc_legal_ops[] = {
+    0,  /* TYPE A N */
+    1,  /* TYPE A T */
+    2,  /* TYPE A C */
+    3   /* TYPE E N */
+};
+
+static const int TYPE_FC_LEGAL_OP_COUNT =
+    (int)(sizeof(k_type_fc_legal_ops) / sizeof(k_type_fc_legal_ops[0]));
+
 /**
- * 充分变异 format_control（≥21 种算子）
+ * 充分变异 format_control（仅使用语法合法的变异）
  * - 非空 => 自动保障 space2=" "
  * - 为空 => 同时清空 space2
- * - 部分算子会顺带设置 type_code，以形成合法/非法组合
+ * - 部分算子会顺带设置 type_code，以形成合法组合
  *
  * @param pkt  ftp_type_packet_t*
  * @param seed 随机种子（相同 seed 可复现）
- * @param op   -1 随机；>=0 指定算子（0..21）
+ * @param op   -1 随机；>=0 指定“合法算子集合”中的索引（0..TYPE_FC_LEGAL_OP_COUNT-1）
  * @return 1 成功；0 失败
  */
 int mutate_type_format_control(ftp_type_packet_t *pkt, uint32_t seed, int op){
-    if(!pkt) return 0;
+    if (!pkt) return 0;
     ensure_space1(pkt);
 
-    uint32_t rng = (seed?seed:0xACCEBEEFu);
-    const int OPS = 22;
-    if(op < 0 || op >= OPS) op = (int)(xorshift32(&rng) % OPS);
+    uint32_t rng = (seed ? seed : 0xACCEBEEFu);
 
-    switch(op){
-        /* —— 合法组合：A/E + N/T/C —— */
+    if (TYPE_FC_LEGAL_OP_COUNT <= 0)
+        return 0;
+
+    /* 从合法集合中选出实际要用的 case 编号（对应原先 switch 的 case 号） */
+    int chosen_case;
+    if (op < 0 || op >= TYPE_FC_LEGAL_OP_COUNT) {
+        int idx = (int)(xorshift32(&rng) % TYPE_FC_LEGAL_OP_COUNT);
+        chosen_case = k_type_fc_legal_ops[idx];
+    } else {
+        chosen_case = k_type_fc_legal_ops[op];
+    }
+
+    switch (chosen_case) {
+        /* —— 仅保留真正语法合法的组合 —— */
         case 0:  set_tc(pkt, "A"); set_fc(pkt, "N"); break;   /* TYPE A N */
         case 1:  set_tc(pkt, "A"); set_fc(pkt, "T"); break;   /* TYPE A T */
         case 2:  set_tc(pkt, "A"); set_fc(pkt, "C"); break;   /* TYPE A C */
-        case 3:  set_tc(pkt, "E"); set_fc(pkt, "N"); break;   /* TYPE E N（常见） */
-
-        /* —— 合法但边界/大小写/宽字符 —— */
-        case 4:  set_tc(pkt, "A"); set_fc(pkt, "n"); break;   /* 小写（大小写宽容性） */
-        case 5:  set_tc(pkt, "A"); set_fc(pkt, "Ｎ"); break;  /* 全角 N（UTF-8 多字节） */
-        case 6:  set_tc(pkt, "E"); set_fc(pkt, " t "); break; /* 带空白的值（前后空格） */
-
-        /* —— 非法/鲁棒性：不该有 format_control 的类型 —— */
-        case 7:  set_tc(pkt, "I"); set_fc(pkt, "N"); break;   /* I N（非法组合） */
-        case 8:  set_tc(pkt, "L"); set_fc(pkt, "C"); break;   /* L C（非法组合，L 应为数字） */
-
-        /* —— 值域异常/注入/编码 —— */
-        case 9:  set_fc(pkt, ""); break;                      /* 删除该字段（为空） */
-        case 10: set_fc(pkt, "X"); break;                     /* 未知字母 */
-        case 11: set_fc(pkt, "0"); break;                     /* 数字 */
-        case 12: set_fc(pkt, "0x4E"); break;                  /* 十六进制风格 */
-        case 13: set_fc(pkt, "%4E"); break;                   /* 百分号编码 */
-        case 14: set_fc(pkt, "N\r\nNOOP"); break;             /* CRLF 注入 */
-        case 15: {                                            /* 超长填满 */
-            buf_fill_repeat(pkt->format_control, sizeof(pkt->format_control), 'A',
-                            sizeof(pkt->format_control)?sizeof(pkt->format_control)-1:0);
-            buf_set(pkt->space2, sizeof(pkt->space2), " ");
-            break;
-        }
-        case 16: set_fc(pkt, "N T"); break;                   /* 含空格的多标记 */
-        case 17: set_fc(pkt, "NONPRINT"); break;              /* 长 token */
-        case 18: set_fc(pkt, "\tN"); break;                   /* 制表符前缀 */
-        case 19: set_fc(pkt, "😀"); break;                    /* 纯 emoji */
-        case 20: {                                            /* 随机从 {N,T,C,X} 选一 */
-            const char *cands[] = {"N","T","C","X"};
-            set_fc(pkt, cands[xorshift32(&rng)%4]);
-            break;
-        }
-        case 21: {                                            /* 和 type_code 同时做“错配” */
-            const char *tc[] = {"I","L","Z","123","a"};
-            set_tc(pkt, tc[xorshift32(&rng)%5]);
-            set_fc(pkt, (xorshift32(&rng)&1) ? "N" : "C");
-            break;
-        }
-        default: return 0;
+        case 3:  set_tc(pkt, "E"); set_fc(pkt, "N"); break;   /* TYPE E N */
+        default:
+            return 0; /* 理论上不会到这里 */
     }
     return 1;
 }
+
+
 static inline void ensure_space(ftp_retr_packet_t *pkt){
     if(pkt->space[0]=='\0'){ pkt->space[0]=' '; pkt->space[1]='\0'; }
 }
 
+/* 合法 STRU structure_code 变异算子在原 switch 中的 case 编号 */
+static const int k_stru_legal_ops[] = {
+    0,  /* "F" */
+    1,  /* "R" */
+    2,  /* "P" */
+    14  /* 随机从 F/R/P 中选一个合法值 */
+};
+
+static const int STRU_LEGAL_OP_COUNT =
+    (int)(sizeof(k_stru_legal_ops) / sizeof(k_stru_legal_ops[0]));
+
 /**
- * 对 STRU 的 structure_code 进行充分变异（≥20 种算子）
+ * 对 STRU 的 structure_code 进行充分变异（仅使用语法合法取值）
  * - 就地修改 pkt->structure_code；必要时补 space=" "
  * - 无堆分配；写入自动截断并 '\0' 终止
  *
  * @param pkt  ftp_stru_packet_t*
  * @param seed 随机种子（相同 seed 可复现）
- * @param op   -1=随机选择；>=0 指定算子编号（0..21）
+ * @param op   -1=随机选择；
+ *             >=0 表示在“合法算子集合”中的索引（0..STRU_LEGAL_OP_COUNT-1）
  * @return 1 成功；0 失败/参数非法
  */
 int mutate_stru_structure_code(ftp_stru_packet_t *pkt, uint32_t seed, int op){
-    if(!pkt) return 0;
+    if (!pkt) return 0;
     ensure_space(pkt);
 
-    char orig[FTP_SZ_STRUCTURE];
-    buf_set(orig, sizeof(orig), pkt->structure_code);
+    uint32_t rng = (seed ? seed : 0xA1B2C3D4u);
 
-    uint32_t rng = (seed?seed:0xA1B2C3D4u);
-    const int OPS = 22;
-    if(op < 0 || op >= OPS) op = (int)(xorshift32(&rng) % OPS);
+    if (STRU_LEGAL_OP_COUNT <= 0)
+        return 0;
 
-    switch(op){
-        /* —— 合法取值 —— */
-        case 0:  buf_set(pkt->structure_code, sizeof(pkt->structure_code), "F"); break;  /* File */
-        case 1:  buf_set(pkt->structure_code, sizeof(pkt->structure_code), "R"); break;  /* Record */
-        case 2:  buf_set(pkt->structure_code, sizeof(pkt->structure_code), "P"); break;  /* Page */
+    /* 从合法算子集合中选出实际要用的 case 编号 */
+    int chosen_case;
+    if (op < 0 || op >= STRU_LEGAL_OP_COUNT) {
+        int idx = (int)(xorshift32(&rng) % STRU_LEGAL_OP_COUNT);
+        chosen_case = k_stru_legal_ops[idx];
+    } else {
+        chosen_case = k_stru_legal_ops[op];
+    }
 
-        /* —— 大小写/空白/可接受的轻微偏差（考察宽容性） —— */
-        case 3:  buf_set(pkt->structure_code, sizeof(pkt->structure_code), "f"); break;  /* 小写 */
-        case 4:  buf_set(pkt->structure_code, sizeof(pkt->structure_code), "  F  "); break; /* 前后空格 */
-        case 5:  buf_set(pkt->structure_code, sizeof(pkt->structure_code), "FILE"); break;  /* 长 token */
-
-        /* —— 非法/边界 —— */
-        case 6:  buf_set(pkt->structure_code, sizeof(pkt->structure_code), ""); break;       /* 空值 */
-        case 7:  buf_set(pkt->structure_code, sizeof(pkt->structure_code), "X"); break;      /* 未知字母 */
-        case 8:  buf_set(pkt->structure_code, sizeof(pkt->structure_code), "0"); break;      /* 数字 */
-        case 9:  buf_set(pkt->structure_code, sizeof(pkt->structure_code), "FR"); break;     /* 多字符组合 */
-        case 10: buf_set(pkt->structure_code, sizeof(pkt->structure_code), "Ｆ"); break;     /* 全角 F（UTF-8） */
-        case 11: buf_set(pkt->structure_code, sizeof(pkt->structure_code), "%46"); break;    /* 百分号编码 'F' */
-        case 12: buf_set(pkt->structure_code, sizeof(pkt->structure_code), "F\r\nNOOP"); break; /* CRLF 注入 */
-        case 13: buf_fill_repeat(pkt->structure_code, sizeof(pkt->structure_code), 'A',
-                                 sizeof(pkt->structure_code)?sizeof(pkt->structure_code)-1:0); break; /* 超长填满 */
-
-        /* —— 与原值相关的扰动 —— */
+    switch (chosen_case) {
+        /* —— 只保留真正合法的结构码 —— */
+        case 0:  /* "F" */
+            buf_set(pkt->structure_code, sizeof(pkt->structure_code), "F");
+            break;
+        case 1:  /* "R" */
+            buf_set(pkt->structure_code, sizeof(pkt->structure_code), "R");
+            break;
+        case 2:  /* "P" */
+            buf_set(pkt->structure_code, sizeof(pkt->structure_code), "P");
+            break;
         case 14: { /* 随机从 F/R/P 选一个合法值 */
-            const char *ok[] = {"F","R","P"};
-            buf_set(pkt->structure_code, sizeof(pkt->structure_code), ok[xorshift32(&rng)%3]);
+            const char *ok[] = {"F", "R", "P"};
+            buf_set(pkt->structure_code, sizeof(pkt->structure_code),
+                    ok[xorshift32(&rng) % 3]);
             break;
         }
-        case 15: { /* 基于原值的大小写翻转（若原值为空则用 "F"） */
-            char tmp[FTP_SZ_STRUCTURE];
-            buf_set(tmp, sizeof(tmp), orig[0]?orig:"F");
-            size_t n = cstrnlen_(tmp, sizeof(tmp));
-            for(size_t i=0;i<n;++i) if(isalpha((unsigned char)tmp[i])) tmp[i]^=0x20;
-            buf_set(pkt->structure_code, sizeof(pkt->structure_code), tmp);
-            break;
-        }
-        case 16: { /* 位翻转一次（对首字符） */
-            char tmp[FTP_SZ_STRUCTURE];
-            buf_set(tmp, sizeof(tmp), orig[0]?orig:"F");
-            if(tmp[0]) tmp[0] ^= (char)(1u << (xorshift32(&rng)%5));
-            buf_set(pkt->structure_code, sizeof(pkt->structure_code), tmp);
-            break;
-        }
-        case 17: buf_set(pkt->structure_code, sizeof(pkt->structure_code), "\tF"); break;   /* 制表符前缀 */
-        case 18: buf_set(pkt->structure_code, sizeof(pkt->structure_code), "\"F\""); break; /* 引号包裹 */
-        case 19: buf_set(pkt->structure_code, sizeof(pkt->structure_code), "PAGE"); break;  /* 另一长 token */
-        case 20: buf_set(pkt->structure_code, sizeof(pkt->structure_code), "R\nev"); break; /* 内含换行 */
-        case 21: buf_set(pkt->structure_code, sizeof(pkt->structure_code), "𝔉"); break;    /* 花体字母（多字节） */
-
-        default: return 0;
+        default:
+            return 0;  /* 防御性兜底，不应到达这里 */
     }
     return 1;
 }
 
 
 
+/* 合法 MODE mode_code 变异算子在原 switch 中的 case 编号 */
+static const int k_mode_legal_ops[] = {
+    0,  /* "S" */
+    1,  /* "B" */
+    2,  /* "C" */
+    14  /* 随机从 {S,B,C} 选一个合法值 */
+};
+
+static const int MODE_LEGAL_OP_COUNT =
+    (int)(sizeof(k_mode_legal_ops) / sizeof(k_mode_legal_ops[0]));
+
 /**
- * 对 MODE 的 mode_code 做充分变异（≥20 种算子）
+ * 对 MODE 的 mode_code 做充分变异（仅使用语法合法取值）
  * - 就地修改 pkt->mode_code；必要时补 space=" "
  * - 无动态分配；写入自动截断并 '\0' 结尾
  *
  * @param pkt  ftp_mode_packet_t*
  * @param seed 随机种子（相同 seed 可复现）
- * @param op   -1 随机；>=0 指定算子（0..21）
+ * @param op   -1 随机；>=0 表示在“合法算子集合”中的索引（0..MODE_LEGAL_OP_COUNT-1）
  * @return 1 成功；0 失败
  */
 int mutate_mode_mode_code(ftp_mode_packet_t *pkt, uint32_t seed, int op){
-    if(!pkt) return 0;
+    if (!pkt) return 0;
     ensure_space(pkt);
 
-    char orig[FTP_SZ_MODE];
-    buf_set(orig, sizeof(orig), pkt->mode_code);
+    uint32_t rng = (seed ? seed : 0xACCEBEEFu);
 
-    uint32_t rng = (seed?seed:0xACCEBEEFu);
-    const int OPS = 22;
-    if(op < 0 || op >= OPS) op = (int)(xorshift32(&rng) % OPS);
+    if (MODE_LEGAL_OP_COUNT <= 0)
+        return 0;
 
-    switch(op){
-        /* —— 合法取值 —— */
-        case 0:  buf_set(pkt->mode_code, sizeof(pkt->mode_code), "S"); break; /* Stream */
-        case 1:  buf_set(pkt->mode_code, sizeof(pkt->mode_code), "B"); break; /* Block  */
-        case 2:  buf_set(pkt->mode_code, sizeof(pkt->mode_code), "C"); break; /* Compressed */
+    /* 从合法算子集合中选出实际要用的 case 编号 */
+    int chosen_case;
+    if (op < 0 || op >= MODE_LEGAL_OP_COUNT) {
+        int idx = (int)(xorshift32(&rng) % MODE_LEGAL_OP_COUNT);
+        chosen_case = k_mode_legal_ops[idx];
+    } else {
+        chosen_case = k_mode_legal_ops[op];
+    }
 
-        /* —— 大小写/空白/长 token（考察宽容性） —— */
-        case 3:  buf_set(pkt->mode_code, sizeof(pkt->mode_code), "s"); break;         /* 小写 */
-        case 4:  buf_set(pkt->mode_code, sizeof(pkt->mode_code), "  S  "); break;     /* 前后空格 */
-        case 5:  buf_set(pkt->mode_code, sizeof(pkt->mode_code), "STREAM"); break;    /* 长 token */
-
-        /* —— 非法/边界 —— */
-        case 6:  buf_set(pkt->mode_code, sizeof(pkt->mode_code), ""); break;          /* 空值 */
-        case 7:  buf_set(pkt->mode_code, sizeof(pkt->mode_code), "X"); break;         /* 未知字母 */
-        case 8:  buf_set(pkt->mode_code, sizeof(pkt->mode_code), "0"); break;         /* 数字 */
-        case 9:  buf_set(pkt->mode_code, sizeof(pkt->mode_code), "SB"); break;        /* 多字符组合 */
-        case 10: buf_set(pkt->mode_code, sizeof(pkt->mode_code), "Ｓ"); break;        /* 全角 S（UTF-8） */
-        case 11: buf_set(pkt->mode_code, sizeof(pkt->mode_code), "%53"); break;       /* 百分号编码 'S' */
-        case 12: buf_set(pkt->mode_code, sizeof(pkt->mode_code), "S\r\nNOOP"); break; /* CRLF 注入 */
-        case 13: buf_fill_repeat(pkt->mode_code, sizeof(pkt->mode_code), 'A',
-                                 sizeof(pkt->mode_code)?sizeof(pkt->mode_code)-1:0); break; /* 超长填满 */
-
-        /* —— 基于原值的扰动 —— */
+    switch (chosen_case) {
+        /* —— 只保留真正合法的 MODE 码 —— */
+        case 0:  /* "S" */
+            buf_set(pkt->mode_code, sizeof(pkt->mode_code), "S");
+            break;
+        case 1:  /* "B" */
+            buf_set(pkt->mode_code, sizeof(pkt->mode_code), "B");
+            break;
+        case 2:  /* "C" */
+            buf_set(pkt->mode_code, sizeof(pkt->mode_code), "C");
+            break;
         case 14: { /* 在 {S,B,C} 中随机一个合法值 */
             const char *ok[] = {"S","B","C"};
-            buf_set(pkt->mode_code, sizeof(pkt->mode_code), ok[xorshift32(&rng)%3]);
+            buf_set(pkt->mode_code, sizeof(pkt->mode_code),
+                    ok[xorshift32(&rng) % 3]);
             break;
         }
-        case 15: { /* 大小写翻转（若原值为空则用 "S"） */
-            char tmp[FTP_SZ_MODE];
-            buf_set(tmp, sizeof(tmp), orig[0]?orig:"S");
-            size_t n = cstrnlen_(tmp, sizeof(tmp));
-            for(size_t i=0;i<n;++i) if(isalpha((unsigned char)tmp[i])) tmp[i]^=0x20;
-            buf_set(pkt->mode_code, sizeof(pkt->mode_code), tmp);
-            break;
-        }
-        case 16: { /* 位翻转一次（对首字符） */
-            char tmp[FTP_SZ_MODE];
-            buf_set(tmp, sizeof(tmp), orig[0]?orig:"S");
-            if(tmp[0]) tmp[0] ^= (char)(1u << (xorshift32(&rng)%5));
-            buf_set(pkt->mode_code, sizeof(pkt->mode_code), tmp);
-            break;
-        }
-
-        /* —— 其它鲁棒性场景 —— */
-        case 17: buf_set(pkt->mode_code, sizeof(pkt->mode_code), "\tS"); break;       /* 制表符前缀 */
-        case 18: buf_set(pkt->mode_code, sizeof(pkt->mode_code), "\"S\""); break;     /* 引号包裹 */
-        case 19: buf_set(pkt->mode_code, sizeof(pkt->mode_code), "S B"); break;       /* 中间含空格 */
-        case 20: buf_set(pkt->mode_code, sizeof(pkt->mode_code), "𝕊"); break;        /* 花体/多字节 */
-        case 21: { /* 从 {S,B,C,X,0,a} 随机选 */
-            const char *cand[] = {"S","B","C","X","0","a"};
-            buf_set(pkt->mode_code, sizeof(pkt->mode_code), cand[xorshift32(&rng)%6]);
-            break;
-        }
-
-        default: return 0;
+        default:
+            return 0;  /* 理论上不会到这里 */
     }
+
     return 1;
 }
 
+/* 合法 RETR pathname 变异算子在原 switch 中的 case 编号 */
+static const int k_retr_legal_ops[] = {
+    0,   /* "file.txt" */
+    1,   /* "/var/log/syslog" */
+    2,   /* "./a/b/c.txt" */
+    3,   /* "../secret/report.pdf" */
+    4,   /* ".hidden" */
+    5,   /* "My Documents/report 2020.txt" */
+    6,   /* "dir///sub////file" */
+    7,   /* "dir/" */
+    8,   /* 很深的 aaaa/.../file.bin */
+    9,   /* 超长 'A' 填满的路径 */
+    10,  /* "data/*.dat" */
+    11,  /* "src/????.c" */
+    12,  /* "set/[abc]/x.txt" */
+    13,  /* "\"quoted name\".txt" */
+    14,  /* "dir\\sub\\file.txt" */
+    15,  /* "C:\\Windows\\system32\\drivers\\etc\\hosts" */
+    16,  /* "con.txt" */
+    20,  /* "  spaced-leading-and-trailing  " */
+    25   /* "~user/.ssh/id_rsa" */
+};
+
+static const int RETR_LEGAL_OP_COUNT =
+    (int)(sizeof(k_retr_legal_ops) / sizeof(k_retr_legal_ops[0]));
 
 /**
- * 对 RETR 的 pathname 做充分变异（≥25 种算子）
+ * 对 RETR 的 pathname 做充分变异（仅使用“语法合法”的路径变体）
  * - 就地修改 pkt->pathname；必要时补 space=" "
  * - 无动态分配；写入自动截断并 '\0' 结尾
  *
  * @param pkt  ftp_retr_packet_t*
  * @param seed 随机种子（相同 seed 可复现）
- * @param op   -1 随机；>=0 指定算子（0..26）
+ * @param op   -1 随机；
+ *             >=0 表示在“合法算子集合”中的索引（0..RETR_LEGAL_OP_COUNT-1）
  * @return 1 成功；0 失败
  */
 int mutate_retr_pathname(ftp_retr_packet_t *pkt, uint32_t seed, int op){
-    if(!pkt) return 0;
+    if (!pkt) return 0;
     ensure_space(pkt);
 
-    char orig[FTP_SZ_PATH];
-    buf_set(orig, sizeof(orig), pkt->pathname);
+    uint32_t rng = (seed ? seed : 0xACCEBEEFu);
 
-    uint32_t rng = (seed?seed:0xACCEBEEFu);
-    const int OPS = 27;
-    if(op < 0 || op >= OPS) op = (int)(xorshift32(&rng) % OPS);
+    if (RETR_LEGAL_OP_COUNT <= 0)
+        return 0;
 
-    switch(op){
+    /* 从合法算子集合中选出实际要用的 case 编号 */
+    int chosen_case;
+    if (op < 0 || op >= RETR_LEGAL_OP_COUNT) {
+        int idx = (int)(xorshift32(&rng) % RETR_LEGAL_OP_COUNT);
+        chosen_case = k_retr_legal_ops[idx];
+    } else {
+        chosen_case = k_retr_legal_ops[op];
+    }
+
+    switch (chosen_case) {
         /* —— 合法常见 —— */
-        case 0:  buf_set(pkt->pathname, sizeof(pkt->pathname), "file.txt"); break;
-        case 1:  buf_set(pkt->pathname, sizeof(pkt->pathname), "/var/log/syslog"); break;
-        case 2:  buf_set(pkt->pathname, sizeof(pkt->pathname), "./a/b/c.txt"); break;
-        case 3:  buf_set(pkt->pathname, sizeof(pkt->pathname), "../secret/report.pdf"); break;
-        case 4:  buf_set(pkt->pathname, sizeof(pkt->pathname), ".hidden"); break;
-        case 5:  buf_set(pkt->pathname, sizeof(pkt->pathname), "My Documents/report 2020.txt"); break;
+        case 0:
+            buf_set(pkt->pathname, sizeof(pkt->pathname), "file.txt");
+            break;
+        case 1:
+            buf_set(pkt->pathname, sizeof(pkt->pathname), "/var/log/syslog");
+            break;
+        case 2:
+            buf_set(pkt->pathname, sizeof(pkt->pathname), "./a/b/c.txt");
+            break;
+        case 3:
+            buf_set(pkt->pathname, sizeof(pkt->pathname),
+                    "../secret/report.pdf");
+            break;
+        case 4:
+            buf_set(pkt->pathname, sizeof(pkt->pathname), ".hidden");
+            break;
+        case 5:
+            buf_set(pkt->pathname, sizeof(pkt->pathname),
+                    "My Documents/report 2020.txt");
+            break;
 
         /* —— 目录结构与规格边界 —— */
-        case 6:  buf_set(pkt->pathname, sizeof(pkt->pathname), "dir///sub////file"); break;   /* 多重斜杠 */
-        case 7:  buf_set(pkt->pathname, sizeof(pkt->pathname), "dir/"); break;                /* 目录结尾斜杠 */
-        case 8:  { /* 很深的路径 */
-            char tmp[FTP_SZ_PATH]; tmp[0]='\0';
+        case 6:
+            buf_set(pkt->pathname, sizeof(pkt->pathname),
+                    "dir///sub////file");
+            break;
+        case 7:
+            buf_set(pkt->pathname, sizeof(pkt->pathname), "dir/");
+            break;
+        case 8: { /* 很深的路径 */
+            char tmp[FTP_SZ_PATH]; tmp[0] = '\0';
             const char *seg = "aaaa/";
-            size_t cap = sizeof(tmp), used = 0;
-            while(used + strlen(seg) + 8 < cap){ strcat(tmp, seg); used += strlen(seg); }
+            size_t cap = sizeof(tmp), used = 0, seglen = strlen(seg);
+            while (used + seglen + 8 < cap) {
+                strcat(tmp, seg);
+                used += seglen;
+            }
             strcat(tmp, "file.bin");
             buf_set(pkt->pathname, sizeof(pkt->pathname), tmp);
             break;
         }
-        case 9:  buf_fill_repeat(pkt->pathname, sizeof(pkt->pathname), 'A',
-                                 sizeof(pkt->pathname)?sizeof(pkt->pathname)-1:0); break; /* 超长填满 */
+        case 9:
+            buf_fill_repeat(pkt->pathname, sizeof(pkt->pathname), 'A',
+                            sizeof(pkt->pathname)
+                                ? sizeof(pkt->pathname) - 1
+                                : 0);
+            break;
 
         /* —— 特殊字符与通配 —— */
-        case 10: buf_set(pkt->pathname, sizeof(pkt->pathname), "data/*.dat"); break;
-        case 11: buf_set(pkt->pathname, sizeof(pkt->pathname), "src/????.c"); break;
-        case 12: buf_set(pkt->pathname, sizeof(pkt->pathname), "set/[abc]/x.txt"); break;
-        case 13: buf_set(pkt->pathname, sizeof(pkt->pathname), "\"quoted name\".txt"); break;
+        case 10:
+            buf_set(pkt->pathname, sizeof(pkt->pathname), "data/*.dat");
+            break;
+        case 11:
+            buf_set(pkt->pathname, sizeof(pkt->pathname), "src/????.c");
+            break;
+        case 12:
+            buf_set(pkt->pathname, sizeof(pkt->pathname),
+                    "set/[abc]/x.txt");
+            break;
+        case 13:
+            buf_set(pkt->pathname, sizeof(pkt->pathname),
+                    "\"quoted name\".txt");
+            break;
 
         /* —— 平台差异（Windows 风格） —— */
-        case 14: buf_set(pkt->pathname, sizeof(pkt->pathname), "dir\\sub\\file.txt"); break;
-        case 15: buf_set(pkt->pathname, sizeof(pkt->pathname), "C:\\Windows\\system32\\drivers\\etc\\hosts"); break;
-        case 16: buf_set(pkt->pathname, sizeof(pkt->pathname), "con.txt"); break; /* 保留名 */
-
-        /* —— 编码/Unicode/空白 —— */
-        case 17: buf_set(pkt->pathname, sizeof(pkt->pathname), "测试/文件.txt"); break;
-        case 18: buf_set(pkt->pathname, sizeof(pkt->pathname), "école/über/naïve.txt"); break;
-        case 19: buf_set(pkt->pathname, sizeof(pkt->pathname), "📄.txt"); break;
-        case 20: buf_set(pkt->pathname, sizeof(pkt->pathname), "  spaced-leading-and-trailing  "); break;
-
-        /* —— Percent 编码与注入（可按需关闭） —— */
-        case 21: buf_set(pkt->pathname, sizeof(pkt->pathname), "/etc/%70asswd"); break; /* %70 == 'p' */
-        case 22: buf_set(pkt->pathname, sizeof(pkt->pathname), "file%00.txt"); break;   /* 编码的 NUL */
-        case 23: buf_set(pkt->pathname, sizeof(pkt->pathname), "foo\r\nNOOP"); break;   /* CRLF 注入 */
-
-        /* —— 相对路径/穿越与波浪线 —— */
-        case 24: buf_set(pkt->pathname, sizeof(pkt->pathname), "../../../../../etc/shadow"); break;
-        case 25: buf_set(pkt->pathname, sizeof(pkt->pathname), "~user/.ssh/id_rsa"); break;
-
-        /* —— 基于原值的微扰 —— */
-        case 26: {
-            /* 若原值为空则先给一个基础值，再随机改一个字符 */
-            char tmp[FTP_SZ_PATH];
-            buf_set(tmp, sizeof(tmp), orig[0]?orig:"base.txt");
-            size_t n = cstrnlen_(tmp, sizeof(tmp));
-            if(n==0){ buf_set(pkt->pathname, sizeof(pkt->pathname), "base.txt"); break; }
-            size_t pos = xorshift32(&rng) % n;
-            unsigned char c = (unsigned char)tmp[pos];
-            /* 随机替换为可见字符或翻转某个位 */
-            if((xorshift32(&rng) & 1) == 0){
-                tmp[pos] = (char)('!' + (xorshift32(&rng) % (126-'!'+1)));
-            }else{
-                tmp[pos] = (char)(c ^ (1u << (xorshift32(&rng)%6)));
-            }
-            buf_set(pkt->pathname, sizeof(pkt->pathname), tmp);
+        case 14:
+            buf_set(pkt->pathname, sizeof(pkt->pathname),
+                    "dir\\sub\\file.txt");
             break;
-        }
+        case 15:
+            buf_set(pkt->pathname, sizeof(pkt->pathname),
+                    "C:\\Windows\\system32\\drivers\\etc\\hosts");
+            break;
+        case 16:
+            buf_set(pkt->pathname, sizeof(pkt->pathname), "con.txt");
+            break;
 
-        default: return 0;
+        /* —— 空白边界 —— */
+        case 20:
+            buf_set(pkt->pathname, sizeof(pkt->pathname),
+                    "  spaced-leading-and-trailing  ");
+            break;
+
+        /* —— 波浪线 / 家目录风格 —— */
+        case 25:
+            buf_set(pkt->pathname, sizeof(pkt->pathname),
+                    "~user/.ssh/id_rsa");
+            break;
+
+        default:
+            return 0;  /* 理论上不会到这里 */
     }
     return 1;
 }
+
 static inline void ensure_space_stor(ftp_stor_packet_t *pkt){
     if(pkt->space[0]=='\0'){ pkt->space[0]=' '; pkt->space[1]='\0'; }
 }
 
+/* 合法 STOR pathname 变异算子在原 switch 中的 case 编号 */
+static const int k_stor_legal_ops[] = {
+    0,   /* "upload.bin" */
+    1,   /* "/tmp/out.dat" */
+    2,   /* "./docs/new.txt" */
+    3,   /* "backup/2025-08-23.tar.gz" */
+    4,   /* ".hidden/file" */
+    5,   /* "dir///sub////file" */
+    6,   /* "dir/" */
+    7,   /* 深层 aaaa/.../file.bin */
+    8,   /* 超长 'A' 填满 */
+    9,   /* "a" */
+    10,  /* "data/*.dat" */
+    11,  /* "src/????.c" */
+    12,  /* "\"quoted name\".txt" */
+    13,  /* "name with spaces .txt" */
+    14,  /* "dir\\sub\\file.txt" */
+    16,  /* "aux.txt." */
+    25,  /* "~/.ssh/authorized_keys" */
+    26,  /* "report(1).pdf" */
+    27   /* "report:2025-08-23T12:34:56Z.log" */
+};
+
+static const int STOR_LEGAL_OP_COUNT =
+    (int)(sizeof(k_stor_legal_ops) / sizeof(k_stor_legal_ops[0]));
+
 /**
- * 对 STOR 的 pathname 做充分变异（≥25 种算子）
+ * 对 STOR 的 pathname 做充分变异（仅使用语法合法的变体）
  * - 就地修改 pkt->pathname；必要时补 space=" "
  * - 无动态分配；写入自动截断并 '\0' 结尾
  *
  * @param pkt  ftp_stor_packet_t*
  * @param seed 随机种子（相同 seed 可复现）
- * @param op   -1 随机；>=0 指定算子（0..28）
+ * @param op   -1 随机；>=0 表示在“合法算子集合”中的索引（0..STOR_LEGAL_OP_COUNT-1）
  * @return 1 成功；0 失败
  */
 int mutate_stor_pathname(ftp_stor_packet_t *pkt, uint32_t seed, int op){
-    if(!pkt) return 0;
+    if (!pkt) return 0;
     ensure_space_stor(pkt);
 
-    char orig[FTP_SZ_PATH];
-    buf_set(orig, sizeof(orig), pkt->pathname);
+    uint32_t rng = (seed ? seed : 0xACCEBEEFu);
 
-    uint32_t rng = (seed?seed:0xACCEBEEFu);
-    const int OPS = 29;
-    if(op < 0 || op >= OPS) op = (int)(xorshift32(&rng) % OPS);
+    if (STOR_LEGAL_OP_COUNT <= 0)
+        return 0;
 
-    switch(op){
+    /* 从合法算子集合中选出实际 case 编号（对应原 switch 的 case 号） */
+    int chosen_case;
+    if (op < 0 || op >= STOR_LEGAL_OP_COUNT) {
+        int idx = (int)(xorshift32(&rng) % STOR_LEGAL_OP_COUNT);
+        chosen_case = k_stor_legal_ops[idx];
+    } else {
+        chosen_case = k_stor_legal_ops[op];
+    }
+
+    switch (chosen_case) {
         /* —— 合法常见路径 —— */
-        case 0:  buf_set(pkt->pathname, sizeof(pkt->pathname), "upload.bin"); break;
-        case 1:  buf_set(pkt->pathname, sizeof(pkt->pathname), "/tmp/out.dat"); break;
-        case 2:  buf_set(pkt->pathname, sizeof(pkt->pathname), "./docs/new.txt"); break;
-        case 3:  buf_set(pkt->pathname, sizeof(pkt->pathname), "backup/2025-08-23.tar.gz"); break;
-        case 4:  buf_set(pkt->pathname, sizeof(pkt->pathname), ".hidden/file"); break;
+        case 0:
+            buf_set(pkt->pathname, sizeof(pkt->pathname), "upload.bin");
+            break;
+        case 1:
+            buf_set(pkt->pathname, sizeof(pkt->pathname), "/tmp/out.dat");
+            break;
+        case 2:
+            buf_set(pkt->pathname, sizeof(pkt->pathname), "./docs/new.txt");
+            break;
+        case 3:
+            buf_set(pkt->pathname, sizeof(pkt->pathname),
+                    "backup/2025-08-23.tar.gz");
+            break;
+        case 4:
+            buf_set(pkt->pathname, sizeof(pkt->pathname), ".hidden/file");
+            break;
 
         /* —— 结构/长度边界 —— */
-        case 5:  buf_set(pkt->pathname, sizeof(pkt->pathname), "dir///sub////file"); break;  /* 多斜杠 */
-        case 6:  buf_set(pkt->pathname, sizeof(pkt->pathname), "dir/"); break;               /* 目录结尾 */
-        case 7:  { /* 很深的层级 */
-            char tmp[FTP_SZ_PATH]; tmp[0]='\0';
+        case 5:
+            buf_set(pkt->pathname, sizeof(pkt->pathname),
+                    "dir///sub////file");
+            break;
+        case 6:
+            buf_set(pkt->pathname, sizeof(pkt->pathname), "dir/");
+            break;
+        case 7: { /* 很深的层级 */
+            char tmp[FTP_SZ_PATH]; tmp[0] = '\0';
             const char *seg = "aaaa/";
-            size_t cap = sizeof(tmp), used = 0;
-            while(used + strlen(seg) + 8 < cap){ strcat(tmp, seg); used += strlen(seg); }
+            size_t cap = sizeof(tmp), used = 0, seglen = strlen(seg);
+            while (used + seglen + 8 < cap) {
+                strcat(tmp, seg);
+                used += seglen;
+            }
             strcat(tmp, "file.bin");
             buf_set(pkt->pathname, sizeof(pkt->pathname), tmp);
             break;
         }
-        case 8:  buf_fill_repeat(pkt->pathname, sizeof(pkt->pathname), 'A',
-                                 sizeof(pkt->pathname)?sizeof(pkt->pathname)-1:0); break; /* 填满上限 */
-        case 9:  buf_set(pkt->pathname, sizeof(pkt->pathname), "a"); break; /* 极短 */
+        case 8:
+            buf_fill_repeat(pkt->pathname, sizeof(pkt->pathname), 'A',
+                            sizeof(pkt->pathname)
+                                ? sizeof(pkt->pathname) - 1
+                                : 0);
+            break;
+        case 9:
+            buf_set(pkt->pathname, sizeof(pkt->pathname), "a");
+            break;
 
         /* —— 特殊字符/通配/引用 —— */
-        case 10: buf_set(pkt->pathname, sizeof(pkt->pathname), "data/*.dat"); break; /* 一些服务器不支持 */
-        case 11: buf_set(pkt->pathname, sizeof(pkt->pathname), "src/????.c"); break;
-        case 12: buf_set(pkt->pathname, sizeof(pkt->pathname), "\"quoted name\".txt"); break;
-        case 13: buf_set(pkt->pathname, sizeof(pkt->pathname), "name with spaces .txt"); break;
-
-        /* —— 平台差异/保留名 —— */
-        case 14: buf_set(pkt->pathname, sizeof(pkt->pathname), "dir\\sub\\file.txt"); break; /* 反斜杠 */
-        case 15: buf_set(pkt->pathname, sizeof(pkt->pathname), "CON"); break;                /* Windows 保留名 */
-        case 16: buf_set(pkt->pathname, sizeof(pkt->pathname), "aux.txt."); break;          /* 结尾点/空格 */
-
-        /* —— 编码/Unicode —— */
-        case 17: buf_set(pkt->pathname, sizeof(pkt->pathname), "输出/结果-测试.txt"); break;
-        case 18: buf_set(pkt->pathname, sizeof(pkt->pathname), "mañana/über/naïve.txt"); break;
-        case 19: buf_set(pkt->pathname, sizeof(pkt->pathname), "📦/📄.bin"); break;
-
-        /* —— 百分号编码/控制字符/注入 —— */
-        case 20: buf_set(pkt->pathname, sizeof(pkt->pathname), "/var/%6C%6F%67.txt"); break; /* %编码 */
-        case 21: buf_set(pkt->pathname, sizeof(pkt->pathname), "file%00.txt"); break;       /* 编码的 NUL */
-        case 22: buf_set(pkt->pathname, sizeof(pkt->pathname), "foo\r\nNOOP"); break;       /* CRLF 注入 */
-        case 23: { /* 内嵌制表/退格 */
-            char tmp[] = "tab\tname\t.txt";
-            buf_set(pkt->pathname, sizeof(pkt->pathname), tmp);
+        case 10:
+            buf_set(pkt->pathname, sizeof(pkt->pathname), "data/*.dat");
             break;
-        }
-
-        /* —— 相对/穿越/家目录 —— */
-        case 24: buf_set(pkt->pathname, sizeof(pkt->pathname), "../../../../../root/.bashrc"); break;
-        case 25: buf_set(pkt->pathname, sizeof(pkt->pathname), "~/.ssh/authorized_keys"); break;
-
-        /* —— 版本/时间戳/碰撞名字 —— */
-        case 26: buf_set(pkt->pathname, sizeof(pkt->pathname), "report(1).pdf"); break;
-        case 27: buf_set(pkt->pathname, sizeof(pkt->pathname), "report:2025-08-23T12:34:56Z.log"); break;
-
-        /* —— 基于原值的微扰（保留原始语义做细微破坏） —— */
-        case 28: {
-            char tmp[FTP_SZ_PATH];
-            buf_set(tmp, sizeof(tmp), orig[0]?orig:"upload.bin");
-            size_t n = cstrnlen_(tmp, sizeof(tmp));
-            if(n==0){ buf_set(pkt->pathname, sizeof(pkt->pathname), "upload.bin"); break; }
-            size_t pos = xorshift32(&rng) % n;
-            unsigned char c = (unsigned char)tmp[pos];
-            if((xorshift32(&rng) & 1) == 0){
-                /* 替换为可见 ASCII */
-                tmp[pos] = (char)('!' + (xorshift32(&rng) % (126-'!'+1)));
-            }else{
-                /* 随机翻转若干 bit */
-                tmp[pos] = (char)(c ^ (1u << (xorshift32(&rng)%6)));
-            }
-            buf_set(pkt->pathname, sizeof(pkt->pathname), tmp);
+        case 11:
+            buf_set(pkt->pathname, sizeof(pkt->pathname), "src/????.c");
             break;
-        }
+        case 12:
+            buf_set(pkt->pathname, sizeof(pkt->pathname),
+                    "\"quoted name\".txt");
+            break;
+        case 13:
+            buf_set(pkt->pathname, sizeof(pkt->pathname),
+                    "name with spaces .txt");
+            break;
 
-        default: return 0;
+        /* —— 平台差异/保留名边界 —— */
+        case 14:
+            buf_set(pkt->pathname, sizeof(pkt->pathname),
+                    "dir\\sub\\file.txt");
+            break;
+        case 16:
+            buf_set(pkt->pathname, sizeof(pkt->pathname), "aux.txt.");
+            break;
+
+        /* —— 相对/家目录/版本命名等 —— */
+        case 25:
+            buf_set(pkt->pathname, sizeof(pkt->pathname),
+                    "~/.ssh/authorized_keys");
+            break;
+        case 26:
+            buf_set(pkt->pathname, sizeof(pkt->pathname), "report(1).pdf");
+            break;
+        case 27:
+            buf_set(pkt->pathname, sizeof(pkt->pathname),
+                    "report:2025-08-23T12:34:56Z.log");
+            break;
+
+        default:
+            return 0;  /* 理论上不会到这里 */
     }
+
     return 1;
 }
+
 
 
 /* —— 可选字段辅助 —— */
@@ -1051,143 +1265,184 @@ int delete_stou_pathname(ftp_stou_packet_t *pkt){
     return 1;
 }
 
+/* 合法 STOU pathname 变异算子在原 switch 中的 case 编号 */
+static const int k_stou_legal_ops[] = {
+    0,   /* 删除参数：规范允许无 pathname，由服务器生成唯一名 */
+    2,   /* "upload-unique.bin" */
+    3,   /* "uploads/out.dat" */
+    4,   /* "./docs/new.txt" */
+    5,   /* "dir///sub////file" */
+    6,   /* "dir/" */
+    7,   /* 深层 aaaa/.../file.bin */
+    8,   /* 超长 'A' 填满 */
+    9,   /* "a" */
+    10,  /* "data/*.dat" */
+    11,  /* "src/????.c" */
+    12,  /* "\"quoted name\".txt" */
+    13,  /* " name with spaces .txt" */
+    14,  /* "dir\\sub\\file.txt" */
+    16,  /* "aux.txt." */
+    25,  /* "~/.ssh/authorized_keys" */
+    26,  /* "stou-2025-08-23T12:34:56Z.log" */
+    27   /* 随机 hex 后缀的 upload_<hex>.bin */
+};
+
+static const int STOU_LEGAL_OP_COUNT =
+    (int)(sizeof(k_stou_legal_ops) / sizeof(k_stou_legal_ops[0]));
+
 /**
- * 对 STOU 的 pathname 做充分变异（≥25 种算子）
+ * 对 STOU 的 pathname 做充分变异（仅使用语法合法的变体）
  * - 就地修改 pkt->pathname；必要时补 space=" "
- * - op=-1 时随机选择算子；op>=0 指定算子（0..28）
- * - 算子中也包含 “删除参数” 与 “仅保留空参数” 等可选字段场景
+ * - op=-1 时在“合法算子集合”中随机选择；op>=0 为集合内索引（0..STOU_LEGAL_OP_COUNT-1）
+ * - 仍保留“删除参数”（无 pathname）这种合法场景
  *
  * @param pkt  ftp_stou_packet_t*
  * @param seed 随机种子（相同 seed 可复现）
- * @param op   -1 随机；>=0 指定算子（0..28）
+ * @param op   -1 随机；>=0 指定合法算子集合中的索引
  * @return 1 成功；0 失败
  */
 int mutate_stou_pathname(ftp_stou_packet_t *pkt, uint32_t seed, int op){
-    if(!pkt) return 0;
+    if (!pkt) return 0;
 
+    /* 原始值目前只有被 op=28 用到，但我们已经禁用了 28；
+       可以保留 orig 避免以后扩展时再写。 */
     char orig[FTP_SZ_PATH];
     buf_set(orig, sizeof(orig), pkt->pathname);
 
-    uint32_t rng = (seed?seed:0xACCEBEEFu);
-    const int OPS = 29;
-    if(op < 0 || op >= OPS) op = (int)(xorshift32(&rng) % OPS);
+    uint32_t rng = (seed ? seed : 0xACCEBEEFu);
 
-    switch(op){
+    if (STOU_LEGAL_OP_COUNT <= 0)
+        return 0;
+
+    /* 从合法算子集合中选出实际的 case 编号（对应原 switch 的 case 号） */
+    int chosen_case;
+    if (op < 0 || op >= STOU_LEGAL_OP_COUNT) {
+        int idx = (int)(xorshift32(&rng) % STOU_LEGAL_OP_COUNT);
+        chosen_case = k_stou_legal_ops[idx];
+    } else {
+        chosen_case = k_stou_legal_ops[op];
+    }
+
+    switch (chosen_case) {
         /* —— 可选字段相关 —— */
         case 0:  /* 删除参数：让服务器自行生成唯一名（规范允许） */
             return delete_stou_pathname(pkt);
 
-        case 1:  /* 空参数但保留空格（边缘非法/实现依赖） */
-            pkt->space[0] = ' '; pkt->space[1] = '\0';
-            pkt->pathname[0] = '\0';
-            return 1;
-
         /* —— 合法常见路径 —— */
-        case 2:  pkt->space[0]=' '; pkt->space[1]='\0';
-                 buf_set(pkt->pathname, sizeof(pkt->pathname), "upload-unique.bin"); break;
-        case 3:  pkt->space[0]=' '; pkt->space[1]='\0';
-                 buf_set(pkt->pathname, sizeof(pkt->pathname), "uploads/out.dat"); break;
-        case 4:  pkt->space[0]=' '; pkt->space[1]='\0';
-                 buf_set(pkt->pathname, sizeof(pkt->pathname), "./docs/new.txt"); break;
+        case 2:
+            pkt->space[0] = ' '; pkt->space[1] = '\0';
+            buf_set(pkt->pathname, sizeof(pkt->pathname),
+                    "upload-unique.bin");
+            break;
+        case 3:
+            pkt->space[0] = ' '; pkt->space[1] = '\0';
+            buf_set(pkt->pathname, sizeof(pkt->pathname),
+                    "uploads/out.dat");
+            break;
+        case 4:
+            pkt->space[0] = ' '; pkt->space[1] = '\0';
+            buf_set(pkt->pathname, sizeof(pkt->pathname),
+                    "./docs/new.txt");
+            break;
 
         /* —— 结构/长度边界 —— */
-        case 5:  pkt->space[0]=' '; pkt->space[1]='\0';
-                 buf_set(pkt->pathname, sizeof(pkt->pathname), "dir///sub////file"); break;
-        case 6:  pkt->space[0]=' '; pkt->space[1]='\0';
-                 buf_set(pkt->pathname, sizeof(pkt->pathname), "dir/"); break;
-        case 7:  { /* 很深的层级 */
-            pkt->space[0]=' '; pkt->space[1]='\0';
-            char tmp[FTP_SZ_PATH]; tmp[0]='\0';
+        case 5:
+            pkt->space[0] = ' '; pkt->space[1] = '\0';
+            buf_set(pkt->pathname, sizeof(pkt->pathname),
+                    "dir///sub////file");
+            break;
+        case 6:
+            pkt->space[0] = ' '; pkt->space[1] = '\0';
+            buf_set(pkt->pathname, sizeof(pkt->pathname), "dir/");
+            break;
+        case 7: { /* 很深的层级 */
+            pkt->space[0] = ' '; pkt->space[1] = '\0';
+            char tmp[FTP_SZ_PATH]; tmp[0] = '\0';
             const char *seg = "aaaa/";
-            size_t cap = sizeof(tmp), used = 0;
-            while(used + strlen(seg) + 8 < cap){ strcat(tmp, seg); used += strlen(seg); }
+            size_t cap = sizeof(tmp), used = 0, seglen = strlen(seg);
+            while (used + seglen + 8 < cap) {
+                strcat(tmp, seg);
+                used += seglen;
+            }
             strcat(tmp, "file.bin");
             buf_set(pkt->pathname, sizeof(pkt->pathname), tmp);
             break;
         }
-        case 8:  pkt->space[0]=' '; pkt->space[1]='\0';
-                 buf_fill_repeat(pkt->pathname, sizeof(pkt->pathname), 'A',
-                                 sizeof(pkt->pathname)?sizeof(pkt->pathname)-1:0); break;
-        case 9:  pkt->space[0]=' '; pkt->space[1]='\0';
-                 buf_set(pkt->pathname, sizeof(pkt->pathname), "a"); break;
+        case 8:
+            pkt->space[0] = ' '; pkt->space[1] = '\0';
+            buf_fill_repeat(pkt->pathname, sizeof(pkt->pathname), 'A',
+                            sizeof(pkt->pathname)
+                                ? sizeof(pkt->pathname) - 1
+                                : 0);
+            break;
+        case 9:
+            pkt->space[0] = ' '; pkt->space[1] = '\0';
+            buf_set(pkt->pathname, sizeof(pkt->pathname), "a");
+            break;
 
         /* —— 特殊字符/通配/引用 —— */
-        case 10: pkt->space[0]=' '; pkt->space[1]='\0';
-                 buf_set(pkt->pathname, sizeof(pkt->pathname), "data/*.dat"); break;
-        case 11: pkt->space[0]=' '; pkt->space[1]='\0';
-                 buf_set(pkt->pathname, sizeof(pkt->pathname), "src/????.c"); break;
-        case 12: pkt->space[0]=' '; pkt->space[1]='\0';
-                 buf_set(pkt->pathname, sizeof(pkt->pathname), "\"quoted name\".txt"); break;
-        case 13: pkt->space[0]=' '; pkt->space[1]='\0';
-                 buf_set(pkt->pathname, sizeof(pkt->pathname), " name with spaces .txt"); break;
+        case 10:
+            pkt->space[0] = ' '; pkt->space[1] = '\0';
+            buf_set(pkt->pathname, sizeof(pkt->pathname), "data/*.dat");
+            break;
+        case 11:
+            pkt->space[0] = ' '; pkt->space[1] = '\0';
+            buf_set(pkt->pathname, sizeof(pkt->pathname), "src/????.c");
+            break;
+        case 12:
+            pkt->space[0] = ' '; pkt->space[1] = '\0';
+            buf_set(pkt->pathname, sizeof(pkt->pathname),
+                    "\"quoted name\".txt");
+            break;
+        case 13:
+            pkt->space[0] = ' '; pkt->space[1] = '\0';
+            buf_set(pkt->pathname, sizeof(pkt->pathname),
+                    " name with spaces .txt");
+            break;
 
-        /* —— 平台差异/保留名 —— */
-        case 14: pkt->space[0]=' '; pkt->space[1]='\0';
-                 buf_set(pkt->pathname, sizeof(pkt->pathname), "dir\\sub\\file.txt"); break;
-        case 15: pkt->space[0]=' '; pkt->space[1]='\0';
-                 buf_set(pkt->pathname, sizeof(pkt->pathname), "CON"); break;          /* Windows 保留名 */
-        case 16: pkt->space[0]=' '; pkt->space[1]='\0';
-                 buf_set(pkt->pathname, sizeof(pkt->pathname), "aux.txt."); break;     /* 结尾点/空格 */
+        /* —— 平台差异/保留名边界 —— */
+        case 14:
+            pkt->space[0] = ' '; pkt->space[1] = '\0';
+            buf_set(pkt->pathname, sizeof(pkt->pathname),
+                    "dir\\sub\\file.txt");
+            break;
+        case 16:
+            pkt->space[0] = ' '; pkt->space[1] = '\0';
+            buf_set(pkt->pathname, sizeof(pkt->pathname), "aux.txt.");
+            break;
 
-        /* —— 编码/Unicode —— */
-        case 17: pkt->space[0]=' '; pkt->space[1]='\0';
-                 buf_set(pkt->pathname, sizeof(pkt->pathname), "输出/唯一-测试.txt"); break;
-        case 18: pkt->space[0]=' '; pkt->space[1]='\0';
-                 buf_set(pkt->pathname, sizeof(pkt->pathname), "mañana/über/naïve.txt"); break;
-        case 19: pkt->space[0]=' '; pkt->space[1]='\0';
-                 buf_set(pkt->pathname, sizeof(pkt->pathname), "📦/📄.bin"); break;
-
-        /* —— 百分号编码/控制字符/注入 —— */
-        case 20: pkt->space[0]=' '; pkt->space[1]='\0';
-                 buf_set(pkt->pathname, sizeof(pkt->pathname), "/var/%6C%6F%67.txt"); break; /* %编码 */
-        case 21: pkt->space[0]=' '; pkt->space[1]='\0';
-                 buf_set(pkt->pathname, sizeof(pkt->pathname), "file%00.txt"); break;       /* 编码的 NUL */
-        case 22: pkt->space[0]=' '; pkt->space[1]='\0';
-                 buf_set(pkt->pathname, sizeof(pkt->pathname), "foo\r\nNOOP"); break;       /* CRLF 注入 */
-        case 23: pkt->space[0]=' '; pkt->space[1]='\0';
-                 buf_set(pkt->pathname, sizeof(pkt->pathname), "tab\tname\t.txt"); break;
-
-        /* —— 相对/穿越/家目录 —— */
-        case 24: pkt->space[0]=' '; pkt->space[1]='\0';
-                 buf_set(pkt->pathname, sizeof(pkt->pathname), "../../../../../etc/passwd"); break;
-        case 25: pkt->space[0]=' '; pkt->space[1]='\0';
-                 buf_set(pkt->pathname, sizeof(pkt->pathname), "~/.ssh/authorized_keys"); break;
-
-        /* —— 时间戳/随机唯一后缀 —— */
-        case 26: pkt->space[0]=' '; pkt->space[1]='\0';
-                 buf_set(pkt->pathname, sizeof(pkt->pathname), "stou-2025-08-23T12:34:56Z.log"); break;
-        case 27: { /* 生成随机十六进制后缀，模拟“唯一名” */
-            pkt->space[0]=' '; pkt->space[1]='\0';
+        /* —— 家目录/时间戳/唯一名风格 —— */
+        case 25:
+            pkt->space[0] = ' '; pkt->space[1] = '\0';
+            buf_set(pkt->pathname, sizeof(pkt->pathname),
+                    "~/.ssh/authorized_keys");
+            break;
+        case 26:
+            pkt->space[0] = ' '; pkt->space[1] = '\0';
+            buf_set(pkt->pathname, sizeof(pkt->pathname),
+                    "stou-2025-08-23T12:34:56Z.log");
+            break;
+        case 27: {
+            pkt->space[0] = ' '; pkt->space[1] = '\0';
             char tmp[FTP_SZ_PATH];
-            char suf[17]; for(int i=0;i<16;i++){ static const char H[]="0123456789abcdef";
-                suf[i]=H[xorshift32(&rng)&0xF]; } suf[16]='\0';
+            char suf[17];
+            static const char H[] = "0123456789abcdef";
+            for (int i = 0; i < 16; ++i) {
+                suf[i] = H[xorshift32(&rng) & 0xF];
+            }
+            suf[16] = '\0';
             (void)snprintf(tmp, sizeof(tmp), "upload_%s.bin", suf);
             buf_set(pkt->pathname, sizeof(pkt->pathname), tmp);
             break;
         }
 
-        /* —— 基于原值的微扰 —— */
-        case 28: {
-            pkt->space[0]=' '; pkt->space[1]='\0';
-            char tmp[FTP_SZ_PATH];
-            buf_set(tmp, sizeof(tmp), (orig[0]?orig:"upload-unique.bin"));
-            size_t n = cstrnlen_(tmp, sizeof(tmp));
-            size_t pos = (n? (xorshift32(&rng)%n) : 0);
-            if(n==0){ buf_set(pkt->pathname, sizeof(pkt->pathname), "upload-unique.bin"); break; }
-            /* 随机替换或翻转 bit */
-            if((xorshift32(&rng) & 1)==0){
-                tmp[pos] = (char)('!' + (xorshift32(&rng) % (126-'!'+1)));
-            }else{
-                tmp[pos] = (char)(tmp[pos] ^ (1u << (xorshift32(&rng)%6)));
-            }
-            buf_set(pkt->pathname, sizeof(pkt->pathname), tmp);
-            break;
-        }
-
-        default: return 0;
+        default:
+            return 0;
     }
+
     return 1;
 }
+
 
 
 
@@ -1196,221 +1451,293 @@ static inline void ensure_space_required(char space[/*FTP_SZ_SPACE*/]){
     space[0] = ' '; space[1] = '\0';
 }
 
+/* 合法 APPE pathname 变异算子在原 switch 中的 case 编号 */
+static const int k_appe_legal_ops[] = {
+    0,   /* "logs/app.log" */
+    1,   /* "data/out.bin" */
+    2,   /* "./append.txt" */
+    3,   /* "/var/tmp/file" */
+    4,   /* "dir///sub////file" */
+    5,   /* "dir/" */
+    6,   /* 深层 aaaa/.../file.bin */
+    7,   /* 超长 'A' 填满 */
+    8,   /* "a" */
+    9,   /* "data/*.dat" */
+    10,  /* "src/????.c" */
+    11,  /* "\"quoted name\".txt" */
+    12,  /* " name with spaces .txt" */
+    13,  /* "dir\\sub\\file.txt" */
+    15,  /* "aux.txt." */
+    24,  /* "~/.ssh/authorized_keys" */
+    25,  /* "./../..//./a" */
+    26,  /* "appe-2025-08-23T12:34:56Z.log" */
+    27,  /* append_<hex>.bin */
+    28   /* "  file . log  " */
+};
+
+static const int APPE_LEGAL_OP_COUNT =
+    (int)(sizeof(k_appe_legal_ops) / sizeof(k_appe_legal_ops[0]));
+
 /**
- * 对 APPE 的 pathname 做充分变异（≥25 种算子）
+ * 对 APPE 的 pathname 做充分变异（仅使用语法合法的变体）
  * - 就地修改 pkt->pathname；始终保证 pkt->space = " "
- * - op=-1 时随机选择算子；op>=0 指定算子（0..29）
+ * - op=-1 时在“合法算子集合”中随机选择；
+ *   op>=0 表示集合内索引（0..APPE_LEGAL_OP_COUNT-1）
  *
  * @param pkt  ftp_appe_packet_t*
  * @param seed 随机种子（相同 seed 可复现）
- * @param op   -1 随机；>=0 指定算子（0..29）
+ * @param op   -1 随机；>=0 指定合法算子集合中的索引
  * @return 1 成功；0 失败
  */
 int mutate_appe_pathname(ftp_appe_packet_t *pkt, uint32_t seed, int op){
-    if(!pkt) return 0;
+    if (!pkt) return 0;
 
     ensure_space_required(pkt->space);
 
-    char orig[FTP_SZ_PATH];
-    buf_set(orig, sizeof(orig), pkt->pathname);
+    uint32_t rng = (seed ? seed : 0xA99EEDu);
 
-    uint32_t rng = (seed?seed:0xA99EEDu);
-    const int OPS = 30;
-    if(op < 0 || op >= OPS) op = (int)(xorshift32(&rng) % OPS);
+    if (APPE_LEGAL_OP_COUNT <= 0)
+        return 0;
 
-    switch(op){
+    /* 从合法算子集合中选出实际 case 编号（对应原 switch 的 case 号） */
+    int chosen_case;
+    if (op < 0 || op >= APPE_LEGAL_OP_COUNT) {
+        int idx = (int)(xorshift32(&rng) % APPE_LEGAL_OP_COUNT);
+        chosen_case = k_appe_legal_ops[idx];
+    } else {
+        chosen_case = k_appe_legal_ops[op];
+    }
+
+    switch (chosen_case) {
         /* —— 合法常见 —— */
-        case 0:  buf_set(pkt->pathname, sizeof(pkt->pathname), "logs/app.log"); break;
-        case 1:  buf_set(pkt->pathname, sizeof(pkt->pathname), "data/out.bin"); break;
-        case 2:  buf_set(pkt->pathname, sizeof(pkt->pathname), "./append.txt"); break;
-        case 3:  buf_set(pkt->pathname, sizeof(pkt->pathname), "/var/tmp/file"); break;
+        case 0:
+            buf_set(pkt->pathname, sizeof(pkt->pathname), "logs/app.log");
+            break;
+        case 1:
+            buf_set(pkt->pathname, sizeof(pkt->pathname), "data/out.bin");
+            break;
+        case 2:
+            buf_set(pkt->pathname, sizeof(pkt->pathname), "./append.txt");
+            break;
+        case 3:
+            buf_set(pkt->pathname, sizeof(pkt->pathname), "/var/tmp/file");
+            break;
 
         /* —— 结构/长度边界 —— */
-        case 4:  buf_set(pkt->pathname, sizeof(pkt->pathname), "dir///sub////file"); break;
-        case 5:  buf_set(pkt->pathname, sizeof(pkt->pathname), "dir/"); break; /* 末尾斜杠 */
+        case 4:
+            buf_set(pkt->pathname, sizeof(pkt->pathname),
+                    "dir///sub////file");
+            break;
+        case 5:
+            buf_set(pkt->pathname, sizeof(pkt->pathname), "dir/");
+            break;
         case 6: { /* 很深层级 */
-            char tmp[FTP_SZ_PATH]; tmp[0]='\0';
+            char tmp[FTP_SZ_PATH]; tmp[0] = '\0';
             const char *seg = "aaaa/";
-            size_t used = 0, cap = sizeof(tmp);
-            while(used + strlen(seg) + 8 < cap){ strcat(tmp, seg); used += strlen(seg); }
+            size_t used = 0, cap = sizeof(tmp), seglen = strlen(seg);
+            while (used + seglen + 8 < cap) {
+                strcat(tmp, seg);
+                used += seglen;
+            }
             strcat(tmp, "file.bin");
             buf_set(pkt->pathname, sizeof(pkt->pathname), tmp);
             break;
         }
-        case 7:  buf_fill_repeat(pkt->pathname, sizeof(pkt->pathname), 'A',
-                                 sizeof(pkt->pathname)?sizeof(pkt->pathname)-1:0); break;
-        case 8:  buf_set(pkt->pathname, sizeof(pkt->pathname), "a"); break;
+        case 7:
+            buf_fill_repeat(pkt->pathname, sizeof(pkt->pathname), 'A',
+                            sizeof(pkt->pathname)
+                                ? sizeof(pkt->pathname) - 1
+                                : 0);
+            break;
+        case 8:
+            buf_set(pkt->pathname, sizeof(pkt->pathname), "a");
+            break;
 
         /* —— 通配/空白/引号 —— */
-        case 9:  buf_set(pkt->pathname, sizeof(pkt->pathname), "data/*.dat"); break;
-        case 10: buf_set(pkt->pathname, sizeof(pkt->pathname), "src/????.c"); break;
-        case 11: buf_set(pkt->pathname, sizeof(pkt->pathname), "\"quoted name\".txt"); break;
-        case 12: buf_set(pkt->pathname, sizeof(pkt->pathname), " name with spaces .txt"); break;
+        case 9:
+            buf_set(pkt->pathname, sizeof(pkt->pathname), "data/*.dat");
+            break;
+        case 10:
+            buf_set(pkt->pathname, sizeof(pkt->pathname), "src/????.c");
+            break;
+        case 11:
+            buf_set(pkt->pathname, sizeof(pkt->pathname),
+                    "\"quoted name\".txt");
+            break;
+        case 12:
+            buf_set(pkt->pathname, sizeof(pkt->pathname),
+                    " name with spaces .txt");
+            break;
 
         /* —— 平台差异/保留名/奇异后缀 —— */
-        case 13: buf_set(pkt->pathname, sizeof(pkt->pathname), "dir\\sub\\file.txt"); break; /* 反斜杠 */
-        case 14: buf_set(pkt->pathname, sizeof(pkt->pathname), "CON"); break;          /* Windows 保留名 */
-        case 15: buf_set(pkt->pathname, sizeof(pkt->pathname), "aux.txt."); break;     /* 结尾点/空格 */
-
-        /* —— 非 ASCII/Unicode —— */
-        case 16: buf_set(pkt->pathname, sizeof(pkt->pathname), "输出/追加-测试.txt"); break;
-        case 17: buf_set(pkt->pathname, sizeof(pkt->pathname), "mañana/über/naïve.txt"); break;
-        case 18: buf_set(pkt->pathname, sizeof(pkt->pathname), "📂/📄.log"); break;
-
-        /* —— 百分号/控制字符/注入 —— */
-        case 19: buf_set(pkt->pathname, sizeof(pkt->pathname), "/var/%6C%6F%67.txt"); break; /* %编码 */
-        case 20: buf_set(pkt->pathname, sizeof(pkt->pathname), "file%00.txt"); break;       /* 编码的 NUL */
-        case 21: buf_set(pkt->pathname, sizeof(pkt->pathname), "foo\r\nNOOP"); break;       /* CRLF 注入 */
-        case 22: buf_set(pkt->pathname, sizeof(pkt->pathname), "tab\tname\t.txt"); break;
+        case 13:
+            buf_set(pkt->pathname, sizeof(pkt->pathname),
+                    "dir\\sub\\file.txt");
+            break;
+        case 15:
+            buf_set(pkt->pathname, sizeof(pkt->pathname), "aux.txt.");
+            break;
 
         /* —— 穿越/家目录/相对 —— */
-        case 23: buf_set(pkt->pathname, sizeof(pkt->pathname), "../../../../../etc/passwd"); break;
-        case 24: buf_set(pkt->pathname, sizeof(pkt->pathname), "~/.ssh/authorized_keys"); break;
-        case 25: buf_set(pkt->pathname, sizeof(pkt->pathname), "./../..//./a"); break;
+        case 24:
+            buf_set(pkt->pathname, sizeof(pkt->pathname),
+                    "~/.ssh/authorized_keys");
+            break;
+        case 25:
+            buf_set(pkt->pathname, sizeof(pkt->pathname),
+                    "./../..//./a");
+            break;
 
         /* —— 时间戳/随机后缀（模拟唯一化） —— */
-        case 26: buf_set(pkt->pathname, sizeof(pkt->pathname), "appe-2025-08-23T12:34:56Z.log"); break;
+        case 26:
+            buf_set(pkt->pathname, sizeof(pkt->pathname),
+                    "appe-2025-08-23T12:34:56Z.log");
+            break;
         case 27: {
             char tmp[FTP_SZ_PATH], suf[17];
-            for(int i=0;i<16;i++){ static const char H[]="0123456789abcdef";
-                suf[i]=H[xorshift32(&rng)&0xF]; } suf[16]='\0';
+            static const char H[] = "0123456789abcdef";
+            for (int i = 0; i < 16; ++i) {
+                suf[i] = H[xorshift32(&rng) & 0xF];
+            }
+            suf[16] = '\0';
             (void)snprintf(tmp, sizeof(tmp), "append_%s.bin", suf);
             buf_set(pkt->pathname, sizeof(pkt->pathname), tmp);
             break;
         }
 
         /* —— 变形：前后空格/点/大小写 —— */
-        case 28: buf_set(pkt->pathname, sizeof(pkt->pathname), "  file . log  "); break;
-
-        /* —— 基于原值的微扰（若原值为空则给默认） —— */
-        case 29: {
-            char tmp[FTP_SZ_PATH];
-            buf_set(tmp, sizeof(tmp), (orig[0]?orig:"append.log"));
-            size_t n = cstrnlen_(tmp, sizeof(tmp));
-            if(n==0){ buf_set(pkt->pathname, sizeof(pkt->pathname), "append.log"); break; }
-            size_t pos = (xorshift32(&rng)%n);
-            if((xorshift32(&rng) & 1)==0){
-                tmp[pos] = (char)('!' + (xorshift32(&rng) % (126-'!'+1))); /* 随机可打印符号 */
-            }else{
-                tmp[pos] = (char)(tmp[pos] ^ (1u << (xorshift32(&rng)%6))); /* 翻转 bit */
-            }
-            buf_set(pkt->pathname, sizeof(pkt->pathname), tmp);
+        case 28:
+            buf_set(pkt->pathname, sizeof(pkt->pathname),
+                    "  file . log  ");
             break;
-        }
 
-        default: return 0;
+        default:
+            return 0;
     }
+
     return 1;
 }
 
 
 
+/* 合法 ALLO byte_count 变异算子在原 switch 中的 case 编号 */
+static const int k_allo_legal_ops[] = {
+    0,   /* "0" */
+    1,   /* "1" */
+    2,   /* "512" */
+    3,   /* "1048576" */
+    4,   /* "2147483647" */
+    5,   /* "4294967295" */
+    8,   /* "000000001024" (leading zeros) */
+    10,  /* "0400" */
+    19,  /* all '9' filling the buffer */
+    20,  /* "18446744073709551615" */
+    22,  /* random decimal digit string */
+    27   /* very big decimal "9999..." */
+};
+
+static const int ALLO_LEGAL_OP_COUNT =
+    (int)(sizeof(k_allo_legal_ops) / sizeof(k_allo_legal_ops[0]));
 
 /**
- * 变异 ftp_allo_packet_t.byte_count
- * - op = -1 随机选择一种算子；op >= 0 时指定算子（0..29）
+ * 变异 ftp_allo_packet_t.byte_count（仅使用语法上合法的十进制整数）
+ * - op = -1 随机选择合法算子；op >= 0 时指定合法算子集合中的索引（0..ALLO_LEGAL_OP_COUNT-1）
  * - 始终保证 pkt->space1 = " "（byte_count 为必选参数）
- *
- * 变异覆盖：0/正数/极大数/负数/前导零/符号/十六进制/八进制/科学计数/小数/NaN/Inf/
- * 千分位/控制字符/CRLF 注入/超长填充/全角数字/随机数字串/原值微扰/单位后缀等
  *
  * @return 1 成功；0 失败
  */
 int mutate_allo_byte_count(ftp_allo_packet_t *pkt, uint32_t seed, int op){
-    if(!pkt) return 0;
+    if (!pkt) return 0;
 
     ensure_space_required(pkt->space1);
 
-    char orig[FTP_SZ_BYTECOUNT];
-    buf_set(orig, sizeof(orig), pkt->byte_count);
-
     uint32_t rng = (seed ? seed : 0xA5A5F00Du);
-    const int OPS = 30;
-    if(op < 0 || op >= OPS) op = (int)(xorshift32(&rng) % OPS);
 
-    switch(op){
+    if (ALLO_LEGAL_OP_COUNT <= 0)
+        return 0;
+
+    /* 从合法算子集合中选出实际的 case 编号（对应原 switch 的 case 号） */
+    int chosen_case;
+    if (op < 0 || op >= ALLO_LEGAL_OP_COUNT) {
+        int idx = (int)(xorshift32(&rng) % ALLO_LEGAL_OP_COUNT);
+        chosen_case = k_allo_legal_ops[idx];
+    } else {
+        chosen_case = k_allo_legal_ops[op];
+    }
+
+    switch (chosen_case) {
         /* —— 合法常见 —— */
-        case 0:  buf_set(pkt->byte_count, sizeof(pkt->byte_count), "0"); break;
-        case 1:  buf_set(pkt->byte_count, sizeof(pkt->byte_count), "1"); break;
-        case 2:  buf_set(pkt->byte_count, sizeof(pkt->byte_count), "512"); break;
-        case 3:  buf_set(pkt->byte_count, sizeof(pkt->byte_count), "1048576"); break;          /* 1 MiB */
-        case 4:  buf_set(pkt->byte_count, sizeof(pkt->byte_count), "2147483647"); break;       /* INT_MAX */
-        case 5:  buf_set(pkt->byte_count, sizeof(pkt->byte_count), "4294967295"); break;       /* UINT32_MAX */
+        case 0:
+            buf_set(pkt->byte_count, sizeof(pkt->byte_count), "0");
+            break;
+        case 1:
+            buf_set(pkt->byte_count, sizeof(pkt->byte_count), "1");
+            break;
+        case 2:
+            buf_set(pkt->byte_count, sizeof(pkt->byte_count), "512");
+            break;
+        case 3:
+            buf_set(pkt->byte_count, sizeof(pkt->byte_count), "1048576");
+            break; /* 1 MiB */
+        case 4:
+            buf_set(pkt->byte_count, sizeof(pkt->byte_count), "2147483647");
+            break; /* INT_MAX */
+        case 5:
+            buf_set(pkt->byte_count, sizeof(pkt->byte_count), "4294967295");
+            break; /* UINT32_MAX */
 
-        /* —— 数字表示变体 —— */
-        case 6:  buf_set(pkt->byte_count, sizeof(pkt->byte_count), "-1"); break;               /* 负数（非法） */
-        case 7:  buf_set(pkt->byte_count, sizeof(pkt->byte_count), "+1024"); break;            /* 显式正号 */
-        case 8:  buf_set(pkt->byte_count, sizeof(pkt->byte_count), "000000001024"); break;     /* 前导零 */
-        case 9:  buf_set(pkt->byte_count, sizeof(pkt->byte_count), "0x400"); break;            /* 十六进制 */
-        case 10: buf_set(pkt->byte_count, sizeof(pkt->byte_count), "0400"); break;             /* 八进制歧义 */
-        case 11: buf_set(pkt->byte_count, sizeof(pkt->byte_count), "1e6"); break;              /* 科学计数 */
-        case 12: buf_set(pkt->byte_count, sizeof(pkt->byte_count), "3.14159"); break;          /* 小数（非法） */
-        case 13: buf_set(pkt->byte_count, sizeof(pkt->byte_count), "inf"); break;              /* 无穷大（非法） */
-        case 14: buf_set(pkt->byte_count, sizeof(pkt->byte_count), "NaN"); break;              /* 非数（非法） */
-        case 15: buf_set(pkt->byte_count, sizeof(pkt->byte_count), "1,024"); break;            /* 千分位分隔 */
+        /* —— 数字表示变体（仍然是纯数字串） —— */
+        case 8:
+            buf_set(pkt->byte_count, sizeof(pkt->byte_count),
+                    "000000001024"); /* leading zeros */
+            break;
+        case 10:
+            buf_set(pkt->byte_count, sizeof(pkt->byte_count),
+                    "0400");         /* digits only, octal-like */
+            break;
 
-        /* —— 空白/控制/注入 —— */
-        case 16: buf_set(pkt->byte_count, sizeof(pkt->byte_count), " \t 1024 \t "); break;     /* 环绕空白 */
-        case 17: buf_set(pkt->byte_count, sizeof(pkt->byte_count), "1024\t"); break;           /* 尾随制表符 */
-        case 18: buf_set(pkt->byte_count, sizeof(pkt->byte_count), "1024\r\nNOOP"); break;     /* CRLF 注入 */
-
-        /* —— 超长/边界 —— */
-        case 19: {                                                                             /* 填满缓冲区 */
+        /* —— 超长/边界：仍然只有 0-9 —— */
+        case 19: { /* 填满缓冲区为 '9' */
             size_t cap = sizeof(pkt->byte_count);
-            if(cap > 1){
-                memset(pkt->byte_count, '9', cap-1);
-                pkt->byte_count[cap-1] = '\0';
+            if (cap > 1) {
+                memset(pkt->byte_count, '9', cap - 1);
+                pkt->byte_count[cap - 1] = '\0';
             } else {
                 buf_set(pkt->byte_count, cap, "9");
             }
             break;
         }
-        case 20: buf_set(pkt->byte_count, sizeof(pkt->byte_count),
-                         "18446744073709551615"); break;                                      /* U64_MAX */
+        case 20:
+            buf_set(pkt->byte_count, sizeof(pkt->byte_count),
+                    "18446744073709551615"); /* U64_MAX */
+            break;
 
-        /* —— 非 ASCII —— */
-        case 21: buf_set(pkt->byte_count, sizeof(pkt->byte_count), "１２３４"); break;          /* 全角数字 */
-
-        /* —— 随机类 —— */
-        case 22: {                                                                             /* 随机数字串 */
+        /* —— 随机纯数字串 —— */
+        case 22: {
             char tmp[FTP_SZ_BYTECOUNT];
             size_t cap = sizeof(tmp);
             size_t n = (xorshift32(&rng) % (cap ? cap : 1));
-            if(n == 0) n = 1;
-            for(size_t i=0;i+1<cap && i<n;i++){
+            if (n == 0) n = 1;
+            size_t i = 0;
+            for (; i + 1 < cap && i < n; ++i) {
                 tmp[i] = (char)('0' + (xorshift32(&rng) % 10));
             }
-            tmp[(n < cap)?n:(cap-1)] = '\0';
-            buf_set(pkt->byte_count, sizeof(pkt->byte_count), tmp);
-            break;
-        }
-        case 23: {                                                                             /* 原值微扰：翻转一位或改一字符 */
-            char tmp[FTP_SZ_BYTECOUNT];
-            buf_set(tmp, sizeof(tmp), orig[0]?orig:"1024");
-            size_t len = strnlen(tmp, sizeof(tmp));
-            if(len == 0){ buf_set(pkt->byte_count, sizeof(pkt->byte_count), "1024"); break; }
-            size_t pos = xorshift32(&rng) % len;
-            if((xorshift32(&rng) & 1) == 0){
-                /* 改成随机可打印字符 */
-                tmp[pos] = (char)('!' + (xorshift32(&rng) % (126 - '!' + 1)));
-            }else{
-                /* 简单数字抖动 */
-                tmp[pos] = (char)('0' + (xorshift32(&rng) % 10));
-            }
+            if (cap > 0)
+                tmp[(i < cap) ? i : (cap - 1)] = '\0';
             buf_set(pkt->byte_count, sizeof(pkt->byte_count), tmp);
             break;
         }
 
-        /* —— 语义花样 —— */
-        case 24: buf_set(pkt->byte_count, sizeof(pkt->byte_count), "1024K"); break;            /* 单位后缀 */
-        case 25: buf_set(pkt->byte_count, sizeof(pkt->byte_count), "2G"); break;               /* 大单位 */
-        case 26: buf_set(pkt->byte_count, sizeof(pkt->byte_count), ""); break;                 /* 空字串（非法） */
-        case 27: buf_set(pkt->byte_count, sizeof(pkt->byte_count), "999999999999999999999999999999999"); break; /* 超大数 */
-        case 28: buf_set(pkt->byte_count, sizeof(pkt->byte_count), " 000 "); break;            /* 全零+空白 */
-        case 29: buf_set(pkt->byte_count, sizeof(pkt->byte_count), "123abc"); break;           /* 数字+垃圾 */
+        /* —— 极大十进制数（纯数字） —— */
+        case 27:
+            buf_set(pkt->byte_count, sizeof(pkt->byte_count),
+                    "999999999999999999999999999999999");
+            break;
 
-        default: return 0;
+        default:
+            return 0;
     }
+
     return 1;
 }
 
@@ -1443,189 +1770,314 @@ int delete_allo_record_format(ftp_allo_packet_t *pkt){
     return 1;
 }
 
-/* 覆盖丰富场景的就地变异器（仅变异 record_format/space2） */
+/* 仅保留语法合法的 ALLO record_format 变异 case 编号 */
+static const unsigned k_allo_rf_legal_cases[] = {
+    0,   /* "R 1" */
+    1,   /* "R 0" */
+    2,   /* "R 512" */
+    3,   /* "R 2147483647" */
+    6,   /* "R 00064" (前导零) */
+    14,  /* "R 9...9" 填满缓冲区的十进制数字 */
+    21,  /* "   R 256" 前导空格 + 合法格式 */
+    22   /* space2 为空, record_format 为空 —— 等价于不带 record format，可选参数省略 */
+};
+
+#define ALLO_RF_LEGAL_OPS (sizeof(k_allo_rf_legal_cases) / sizeof(k_allo_rf_legal_cases[0]))
+
+/* 覆盖丰富场景的就地变异器（仅变异 record_format/space2，且保持语法合法） */
 int mutate_allo_record_format(ftp_allo_packet_t *pkt){
-    if(!pkt) return 0;
+    if (!pkt) return 0;
 
-    static unsigned op_idx = 0;         /* 每次调用轮转一个算子，满足“只收指针”为入参 */
-    const unsigned OPS = 24;
-    unsigned op = (op_idx++) % OPS;
+    if (ALLO_RF_LEGAL_OPS == 0) return 0;
 
-    /* 保留原值以便做“微扰”等 */
-    char orig[FTP_SZ_FORMAT];
-    set_cstr(orig, sizeof(orig), pkt->record_format);
+    /* 仍然保持“只收指针为入参”的轮转风格：静态计数器每次选一个合法算子 */
+    static unsigned op_idx = 0;
+    unsigned sel = (op_idx++) % ALLO_RF_LEGAL_OPS;
+    unsigned op = k_allo_rf_legal_cases[sel];
 
-    switch(op){
+    switch (op){
         /* —— 合法代表值 —— */
-        case 0:  set_space(pkt->space2,1); set_cstr(pkt->record_format,sizeof(pkt->record_format),"R 1"); break;
-        case 1:  set_space(pkt->space2,1); set_cstr(pkt->record_format,sizeof(pkt->record_format),"R 0"); break;
-        case 2:  set_space(pkt->space2,1); set_cstr(pkt->record_format,sizeof(pkt->record_format),"R 512"); break;
-        case 3:  set_space(pkt->space2,1); set_cstr(pkt->record_format,sizeof(pkt->record_format),"R 2147483647"); break;
+        case 0:
+            set_space(pkt->space2, 1);
+            set_cstr(pkt->record_format, sizeof(pkt->record_format), "R 1");
+            break;
 
-        /* —— 边界/非法数值与表示变体 —— */
-        case 4:  set_space(pkt->space2,1); set_cstr(pkt->record_format,sizeof(pkt->record_format),"R -1"); break;
-        case 5:  set_space(pkt->space2,1); set_cstr(pkt->record_format,sizeof(pkt->record_format), "R +64"); break;
-        case 6:  set_space(pkt->space2,1); set_cstr(pkt->record_format,sizeof(pkt->record_format), "R 00064"); break;
-        case 7:  set_space(pkt->space2,1); set_cstr(pkt->record_format,sizeof(pkt->record_format), "R 0x40"); break;
-        case 8:  set_space(pkt->space2,1); set_cstr(pkt->record_format,sizeof(pkt->record_format), "R 1e3"); break;
-        case 9:  set_space(pkt->space2,1); set_cstr(pkt->record_format,sizeof(pkt->record_format), "R 3.14"); break;
+        case 1:
+            set_space(pkt->space2, 1);
+            set_cstr(pkt->record_format, sizeof(pkt->record_format), "R 0");
+            break;
 
-        /* —— 语法缺失/多余 —— */
-        case 10: set_space(pkt->space2,1); set_cstr(pkt->record_format,sizeof(pkt->record_format), "R"); break;                 /* 缺少尺寸 */
-        case 11: set_space(pkt->space2,1); set_cstr(pkt->record_format,sizeof(pkt->record_format), "R\t1024"); break;          /* 制表空白 */
-        case 12: set_space(pkt->space2,1); set_cstr(pkt->record_format,sizeof(pkt->record_format), "r 512"); break;            /* 小写关键字 */
-        case 13: set_space(pkt->space2,1); set_cstr(pkt->record_format,sizeof(pkt->record_format), "M 4096"); break;           /* 未知关键字 */
-        case 14: {                                                                                                             /* 填满缓冲 */
-            set_space(pkt->space2,1);
+        case 2:
+            set_space(pkt->space2, 1);
+            set_cstr(pkt->record_format, sizeof(pkt->record_format), "R 512");
+            break;
+
+        case 3:
+            set_space(pkt->space2, 1);
+            set_cstr(pkt->record_format, sizeof(pkt->record_format), "R 2147483647");
+            break;
+
+        /* —— 数字表示变体（仍然十进制数字） —— */
+        case 6:
+            set_space(pkt->space2, 1);
+            set_cstr(pkt->record_format, sizeof(pkt->record_format), "R 00064");
+            break;
+
+        /* —— 超长填满（R + 很长十进制数字） —— */
+        case 14: {
+            set_space(pkt->space2, 1);
             size_t cap = sizeof(pkt->record_format);
-            if (cap >= 4){
-                pkt->record_format[0]='R'; pkt->record_format[1]=' '; pkt->record_format[2]='9';
-                for(size_t i=3;i<cap-1;i++) pkt->record_format[i]='9';
-                pkt->record_format[cap-1]='\0';
-            }else{
-                set_cstr(pkt->record_format,cap,"R");
+            if (cap >= 4) {
+                pkt->record_format[0] = 'R';
+                pkt->record_format[1] = ' ';
+                pkt->record_format[2] = '9';
+                for (size_t i = 3; i < cap - 1; i++) {
+                    pkt->record_format[i] = '9';
+                }
+                pkt->record_format[cap - 1] = '\0';
+            } else {
+                set_cstr(pkt->record_format, cap, "R");
             }
             break;
         }
-        case 15: set_space(pkt->space2,1); set_cstr(pkt->record_format,sizeof(pkt->record_format), "R 512 extra"); break;      /* 多余 token */
-        case 16: set_space(pkt->space2,1); set_cstr(pkt->record_format,sizeof(pkt->record_format), "R,512"); break;            /* 分隔符异常 */
-        case 17: set_space(pkt->space2,1); set_cstr(pkt->record_format,sizeof(pkt->record_format), "R:512"); break;            /* 分隔符异常 */
 
-        /* —— 控制字符/注入 —— */
-        case 18: set_space(pkt->space2,1); set_cstr(pkt->record_format,sizeof(pkt->record_format), "R 512\r\nNOOP"); break;
+        /* —— 前导空白 + 合法格式 —— */
+        case 21:
+            set_space(pkt->space2, 1);
+            set_cstr(pkt->record_format, sizeof(pkt->record_format), "   R 256");
+            break;
 
-        /* —— 非 ASCII/本地化数字 —— */
-        case 19: set_space(pkt->space2,1); set_cstr(pkt->record_format,sizeof(pkt->record_format), "R １２３"); break;          /* 全角数字 */
+        /* —— 等价删除：不带 record_format，可选参数省略 —— */
+        case 22:
+            set_space(pkt->space2, 0);  /* 不加第二个空格 */
+            set_cstr(pkt->record_format, sizeof(pkt->record_format), "");
+            break;
 
-        /* —— 分隔空格缺失（非法但有用的模糊） —— */
-        case 20: set_space(pkt->space2,0); set_cstr(pkt->record_format,sizeof(pkt->record_format), "R 256"); break;
-
-        /* —— 前导/仅空白 —— */
-        case 21: set_space(pkt->space2,1); set_cstr(pkt->record_format,sizeof(pkt->record_format), "   R 256"); break;
-        case 22: set_space(pkt->space2,0); set_cstr(pkt->record_format,sizeof(pkt->record_format), ""); break;                  /* 等价删除 */
-        case 23: set_space(pkt->space2,1); set_cstr(pkt->record_format,sizeof(pkt->record_format), " \t "); break;              /* 只有空白 */
-
-        default: return 0;
+        default:
+            return 0;
     }
+
     return 1;
 }
 
 
-/* 针对 REST.marker 的充分变异（仅修改 pkt->marker / pkt->space） */
+
+/* 仅保留语法合法的 REST marker 变异 case 编号 */
+static const unsigned k_rest_legal_cases[] = {
+    0,  /* "0" */
+    1,  /* "1" */
+    2,  /* "1234567890" */
+    3,  /* "2147483647" */
+    4,  /* "4294967295" */
+    5,  /* "9223372036854775807" */
+    8,  /* "00000000" */
+    17, /* 全部填充为 '9' 的大整数 */
+    18  /* "18446744073709551616" (> uint64_max，但语法仍是十进制数字串) */
+};
+
+#define REST_LEGAL_OPS (sizeof(k_rest_legal_cases) / sizeof(k_rest_legal_cases[0]))
+
+/* 针对 REST.marker 的充分变异（仅修改 pkt->marker / pkt->space，且保持语法合法） */
 int mutate_rest_marker(ftp_rest_packet_t *pkt){
     if(!pkt) return 0;
+    if(REST_LEGAL_OPS == 0) return 0;
 
-    /* 无外部 seed 入参，这里采用轮转算子，保证多次调用覆盖不同场景 */
+    /* 无外部 seed 入参，这里采用轮转算子，保证多次调用覆盖不同“合法场景” */
     static unsigned op_idx = 0;
-    const unsigned OPS = 22;
-    unsigned op = (op_idx++) % OPS;
+    unsigned sel = (op_idx++) % REST_LEGAL_OPS;
+    unsigned op  = k_rest_legal_cases[sel];
 
     switch(op){
         /* —— 合法代表值/边界 —— */
-        case 0:  set_space(pkt->space,1); set_cstr(pkt->marker, sizeof(pkt->marker), "0"); break;
-        case 1:  set_space(pkt->space,1); set_cstr(pkt->marker, sizeof(pkt->marker), "1"); break;
-        case 2:  set_space(pkt->space,1); set_cstr(pkt->marker, sizeof(pkt->marker), "1234567890"); break;
-        case 3:  set_space(pkt->space,1); set_cstr(pkt->marker, sizeof(pkt->marker), "2147483647"); break;          /* int32_max */
-        case 4:  set_space(pkt->space,1); set_cstr(pkt->marker, sizeof(pkt->marker), "4294967295"); break;          /* uint32_max */
-        case 5:  set_space(pkt->space,1); set_cstr(pkt->marker, sizeof(pkt->marker), "9223372036854775807"); break; /* int64_max */
+        case 0:
+            set_space(pkt->space, 1);
+            set_cstr(pkt->marker, sizeof(pkt->marker), "0");
+            break;
 
-        /* —— 符号/前导零/非十进制表示 —— */
-        case 6:  set_space(pkt->space,1); set_cstr(pkt->marker, sizeof(pkt->marker), "-1"); break;                  /* 负数 */
-        case 7:  set_space(pkt->space,1); set_cstr(pkt->marker, sizeof(pkt->marker), "+0"); break;                  /* 显式正号 */
-        case 8:  set_space(pkt->space,1); set_cstr(pkt->marker, sizeof(pkt->marker), "00000000"); break;            /* 前导零 */
-        case 9:  set_space(pkt->space,1); set_cstr(pkt->marker, sizeof(pkt->marker), "0x7fffffff"); break;          /* 十六进制 */
-        case 10: set_space(pkt->space,1); set_cstr(pkt->marker, sizeof(pkt->marker), "1e12"); break;                /* 科学计数法 */
-        case 11: set_space(pkt->space,1); set_cstr(pkt->marker, sizeof(pkt->marker), "3.1415"); break;              /* 小数 */
+        case 1:
+            set_space(pkt->space, 1);
+            set_cstr(pkt->marker, sizeof(pkt->marker), "1");
+            break;
 
-        /* —— 缺失/仅空白/空白变体 —— */
-        case 12: set_space(pkt->space,1); set_cstr(pkt->marker, sizeof(pkt->marker), ""); break;                    /* 缺失参数（非法） */
-        case 13: set_space(pkt->space,1); set_cstr(pkt->marker, sizeof(pkt->marker), " "); break;                   /* 只有空格 */
-        case 14: set_space(pkt->space,1); set_cstr(pkt->marker, sizeof(pkt->marker), "\t123"); break;               /* 制表符前缀 */
-        case 15: set_space(pkt->space,1); set_cstr(pkt->marker, sizeof(pkt->marker), "123   "); break;              /* 尾随空白 */
-        case 16: set_space(pkt->space,0); set_cstr(pkt->marker, sizeof(pkt->marker), "123"); break;                 /* 缺失必需空格 */
+        case 2:
+            set_space(pkt->space, 1);
+            set_cstr(pkt->marker, sizeof(pkt->marker), "1234567890");
+            break;
 
-        /* —— 长度与缓冲边界/超长 —— */
-        case 17: {                                                                                                  /* 用'9'占满缓冲 */
-            set_space(pkt->space,1);
+        case 3:
+            set_space(pkt->space, 1);
+            set_cstr(pkt->marker, sizeof(pkt->marker), "2147483647"); /* int32_max */
+            break;
+
+        case 4:
+            set_space(pkt->space, 1);
+            set_cstr(pkt->marker, sizeof(pkt->marker), "4294967295"); /* uint32_max */
+            break;
+
+        case 5:
+            set_space(pkt->space, 1);
+            set_cstr(pkt->marker, sizeof(pkt->marker),
+                     "9223372036854775807"); /* int64_max */
+            break;
+
+        /* —— 前导零 —— */
+        case 8:
+            set_space(pkt->space, 1);
+            set_cstr(pkt->marker, sizeof(pkt->marker), "00000000");
+            break;
+
+        /* —— 长度与缓冲边界/超长（仍然全为数字） —— */
+        case 17: {
+            set_space(pkt->space, 1);
             size_t cap = sizeof(pkt->marker);
-            if (cap > 1){
-                memset(pkt->marker, '9', cap-1);
-                pkt->marker[cap-1] = '\0';
-            }else{
-                set_cstr(pkt->marker, cap, "");
+            if (cap > 1) {
+                memset(pkt->marker, '9', cap - 1);
+                pkt->marker[cap - 1] = '\0';
+            } else {
+                set_cstr(pkt->marker, cap, "9");
             }
             break;
         }
-        case 18: set_space(pkt->space,1); set_cstr(pkt->marker, sizeof(pkt->marker), "18446744073709551616"); break;/* >uint64_max */
 
-        /* —— 非数字/混合/Unicode —— */
-        case 19: set_space(pkt->space,1); set_cstr(pkt->marker, sizeof(pkt->marker), "abc"); break;                 /* 非数字 */
-        case 20: set_space(pkt->space,1); set_cstr(pkt->marker, sizeof(pkt->marker), "12abc34"); break;             /* 混合 */
-        case 21: set_space(pkt->space,1); set_cstr(pkt->marker, sizeof(pkt->marker), "１２３"); break;               /* 全角数字 */
+        case 18:
+            set_space(pkt->space, 1);
+            set_cstr(pkt->marker, sizeof(pkt->marker),
+                     "18446744073709551616"); /* > uint64_max，语法仍是十进制整数 */
+            break;
 
-        /* —— 额外：控制字符/注入（可与上面任一替换某个 case 使用）
-           set_space(pkt->space,1); set_cstr(pkt->marker, sizeof(pkt->marker), "123\r\nNOOP");
-         */
-
-        default: return 0;
+        default:
+            return 0;
     }
+
     return 1;
 }
 
 
+/* 只保留语法合法的 RNFR pathname 变异 case */
+static const unsigned k_rnfr_legal_cases[] = {
+    0,  1,  2,  3,  4,  5,  6,
+    7,  8,  9,  10, 11, 12, 13,
+    14, 15, 16, 17, 18,
+    20, 21, 22       /* 排除了 19 (CRLF 注入) 和 23 (缺空格) */
+};
 
-/* 针对 RNFR.pathname 的充分变异（只改 pkt->pathname / pkt->space） */
+#define RNFR_LEGAL_OPS (sizeof(k_rnfr_legal_cases)/sizeof(k_rnfr_legal_cases[0]))
+
+/* 针对 RNFR.pathname 的充分变异（只改 pkt->pathname / pkt->space，且语法合法） */
 int mutate_rnfr_pathname(ftp_rnfr_packet_t *pkt){
     if(!pkt) return 0;
+    if(RNFR_LEGAL_OPS == 0) return 0;
 
-    /* 轮转式算子选择：多次调用覆盖不同场景 */
+    /* 轮转式算子选择：多次调用覆盖不同“合法场景” */
     static unsigned op_idx = 0;
-    const unsigned OPS = 24;
-    unsigned op = (op_idx++) % OPS;
+    unsigned op = k_rnfr_legal_cases[(op_idx++) % RNFR_LEGAL_OPS];
 
     switch(op){
         /* —— 合法基础/常见形式 —— */
-        case 0:  set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname), "file.txt"); break;
-        case 1:  set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname), "/var/log/syslog"); break;
-        case 2:  set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname), "./a/b/c"); break;
-        case 3:  set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname), "dir/"); break;          /* 目录尾随斜杠 */
+        case 0:
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname, sizeof(pkt->pathname), "file.txt");
+            break;
+        case 1:
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname, sizeof(pkt->pathname), "/var/log/syslog");
+            break;
+        case 2:
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname, sizeof(pkt->pathname), "./a/b/c");
+            break;
+        case 3:
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname, sizeof(pkt->pathname), "dir/");      /* 目录尾随斜杠 */
+            break;
 
-        /* —— 路径遍历/可疑目标 —— */
-        case 4:  set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname), "../../etc/passwd"); break;
-        case 5:  set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname), ".././../..////secret"); break;
-        case 6:  set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname), "/../.."); break;
+        /* —— 路径遍历/可疑目标（语法仍合法） —— */
+        case 4:
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname, sizeof(pkt->pathname), "../../etc/passwd");
+            break;
+        case 5:
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname, sizeof(pkt->pathname),
+                     ".././../..////secret");
+            break;
+        case 6:
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname, sizeof(pkt->pathname), "/../..");
+            break;
 
         /* —— 平台/分隔符变体（Windows/Mix） —— */
-        case 7:  set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname),
-                                                   "C:\\\\Windows\\\\System32\\\\drivers\\\\etc\\\\hosts"); break;
-        case 8:  set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname),
-                                                   "dir\\\\sub/..\\\\..//file.bin"); break;
+        case 7:
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname, sizeof(pkt->pathname),
+                     "C:\\\\Windows\\\\System32\\\\drivers\\\\etc\\\\hosts");
+            break;
+        case 8:
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname, sizeof(pkt->pathname),
+                     "dir\\\\sub/..\\\\..//file.bin");
+            break;
 
         /* —— 模式/通配符/特殊名 —— */
-        case 9:  set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname), "*?.[0-9]{1,3}"); break;
-        case 10: set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname), "CON"); break;      /* Windows 保留名 */
-        case 11: set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname), ".hidden"); break;  /* 隐藏文件 */
+        case 9:
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname, sizeof(pkt->pathname),
+                     "*?.[0-9]{1,3}");
+            break;
+        case 10:
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname, sizeof(pkt->pathname), "CON");
+            break;    /* Windows 保留名 */
+        case 11:
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname, sizeof(pkt->pathname), ".hidden");
+            break;
 
         /* —— 空白与引号 —— */
-        case 12: set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname), "a b/ c.txt"); break;
-        case 13: set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname), "\"quoted name\""); break;
-        case 14: set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname), "'single quoted'"); break;
+        case 12:
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname, sizeof(pkt->pathname),
+                     "a b/ c.txt");
+            break;
+        case 13:
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname, sizeof(pkt->pathname),
+                     "\"quoted name\"");
+            break;
+        case 14:
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname, sizeof(pkt->pathname),
+                     "'single quoted'");
+            break;
 
         /* —— 编码/Unicode —— */
-        case 15: set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname),
-                                                   "%2e%2e%2fetc%2fpasswd"); break;           /* URL 编码 */
-        case 16: set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname),
-                                                   "%252e%252e%252fetc%252fpasswd"); break;   /* 双重编码 */
-        case 17: set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname),
-                                                   "目录/文件.txt"); break;                   /* 非 ASCII */
-        case 18: set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname),
-                                                   "dir/😀.bin"); break;                      /* emoji */
+        case 15:
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname, sizeof(pkt->pathname),
+                     "%2e%2e%2fetc%2fpasswd");
+            break;   /* URL 编码 */
+        case 16:
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname, sizeof(pkt->pathname),
+                     "%252e%252e%252fetc%252fpasswd");
+            break;   /* 双重编码 */
+        case 17:
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname, sizeof(pkt->pathname),
+                     "目录/文件.txt");
+            break;
+        case 18:
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname, sizeof(pkt->pathname),
+                     "dir/😀.bin");
+            break;
 
-        /* —— 控制字符/注入（非法） —— */
-        case 19: set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname),
-                                                   "foo\r\nNOOP"); break;                     /* 试探命令拼接 */
-        case 20: set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname),
-                                                   "\tpath\\with\\tab"); break;               /* 前导制表符 */
+        /* —— 有 TAB 的路径（仍然视为合法字符） —— */
+        case 20:
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname, sizeof(pkt->pathname),
+                     "\tpath\\with\\tab");
+            break;
 
         /* —— 长度与边界 —— */
         case 21: {  /* 填满缓冲：重复 'A' */
@@ -1634,12 +2086,12 @@ int mutate_rnfr_pathname(ftp_rnfr_packet_t *pkt){
             if (cap > 1){
                 memset(pkt->pathname, 'A', cap-1);
                 pkt->pathname[cap-1] = '\0';
-            }else{
+            } else {
                 set_cstr(pkt->pathname, cap, "");
             }
             break;
         }
-        case 22: {  /* 以 ../../ 重复填充到接近上限 */
+        case 22: {  /* 以 ../ 重复填充到接近上限 */
             set_space(pkt->space,1);
             const char *seg = "../";
             size_t cap = sizeof(pkt->pathname);
@@ -1653,15 +2105,10 @@ int mutate_rnfr_pathname(ftp_rnfr_packet_t *pkt){
             break;
         }
 
-        /* —— 缺失/分隔符异常 —— */
-        case 23: set_space(pkt->space,0); set_cstr(pkt->pathname, sizeof(pkt->pathname), "missing-space.txt"); break;
-
-        /* 也可按需增加：
-           set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname), "abc\0def"); // 内嵌 NUL（C 字符串在 \0 截断）
-        */
-
-        default: return 0;
+        default:
+            return 0;
     }
+
     return 1;
 }
 
@@ -1683,15 +2130,27 @@ static void toggle_case(char *s){
         else if (isupper((unsigned char)*s)) *s = (char)tolower((unsigned char)*s);
     }
 }
-
-/* 针对 RNTO.pathname 的充分变异（主要改 pkt->pathname；必要时也调整 pkt->space） */
+/* 针对 RNTO.pathname 的充分变异（只改 pkt->pathname / pkt->space，保持语法合法） */
 int mutate_rnto_pathname(ftp_rnto_packet_t *pkt){
     if(!pkt) return 0;
 
-    /* 轮转式算子选择：多次调用覆盖不同场景（也可改为 RNG） */
+    /* 轮转式算子选择：多次调用覆盖不同“合法”场景 */
     static unsigned op_idx = 0;
-    const unsigned OPS = 26;
-    unsigned op = (op_idx++) % OPS;
+
+    /* 只保留语法合法的 case：
+       - 去掉 24: "new\r\nNOOP"（CRLF 注入）
+       - 原 25 改成有空格的“超长 pathname”，语法合法 */
+    static const unsigned k_rnto_legal_cases[] = {
+        0,  1,  2,  3,  4,
+        5,  6,  7,  8,  9,
+        10, 11, 12, 13, 14,
+        15, 16, 17, 18, 19,
+        20, 21, 22, 23, 25
+    };
+    const unsigned OPS = (unsigned)(sizeof(k_rnto_legal_cases)/sizeof(k_rnto_legal_cases[0]));
+    if (OPS == 0) return 0;
+
+    unsigned op = k_rnto_legal_cases[(op_idx++) % OPS];
 
     /* 记录原值，便于基于原始输入的就地变形 */
     char orig[FTP_SZ_PATH];
@@ -1739,48 +2198,106 @@ int mutate_rnto_pathname(ftp_rnto_packet_t *pkt){
         }
 
         /* —— B. 合法常见目标名称 —— */
-        case 5:  set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname), "newname.txt"); break;
-        case 6:  set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname), "/var/tmp/newname"); break;
-        case 7:  set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname), "./renamed/file"); break;
-        case 8:  set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname), "dir/"); break;          /* 目录尾斜杠 */
+        case 5:
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname, sizeof(pkt->pathname), "newname.txt");
+            break;
+        case 6:
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname, sizeof(pkt->pathname), "/var/tmp/newname");
+            break;
+        case 7:
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname, sizeof(pkt->pathname), "./renamed/file");
+            break;
+        case 8:
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname, sizeof(pkt->pathname), "dir/"); /* 目录尾斜杠 */
+            break;
 
-        /* —— C. 路径遍历/可疑位置 —— */
-        case 9:  set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname), "../../etc/passwd"); break;
-        case 10: set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname), ".././..////.//secret"); break;
-        case 11: set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname), "/../.."); break;
+        /* —— C. 路径遍历/可疑位置（语法仍合法） —— */
+        case 9:
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname, sizeof(pkt->pathname), "../../etc/passwd");
+            break;
+        case 10:
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname, sizeof(pkt->pathname), ".././..////.//secret");
+            break;
+        case 11:
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname, sizeof(pkt->pathname), "/../..");
+            break;
 
         /* —— D. 平台/分隔符变体（Windows/Mix） —— */
-        case 12: set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname),
-                                                   "C:\\\\Temp\\\\new\\\\name.txt"); break;
-        case 13: set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname),
-                                                   "dir\\\\sub/..\\\\..//new.bin"); break;
+        case 12:
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname, sizeof(pkt->pathname),
+                     "C:\\\\Temp\\\\new\\\\name.txt");
+            break;
+        case 13:
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname, sizeof(pkt->pathname),
+                     "dir\\\\sub/..\\\\..//new.bin");
+            break;
 
         /* —— E. 特殊/危险名、通配、ADS —— */
-        case 14: set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname), "CON"); break;      /* Win 保留名 */
-        case 15: set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname), "file.txt:stream"); break; /* NTFS ADS */
-        case 16: set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname), "bad<>:\"/\\|?*.txt"); break;
-        case 17: set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname), ".hidden_new"); break;
+        case 14:
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname, sizeof(pkt->pathname), "CON"); /* Win 保留名 */
+            break;
+        case 15:
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname, sizeof(pkt->pathname),
+                     "file.txt:stream"); /* NTFS ADS */
+            break;
+        case 16:
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname, sizeof(pkt->pathname),
+                     "bad<>:\"/\\|?*.txt");
+            break;
+        case 17:
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname, sizeof(pkt->pathname), ".hidden_new");
+            break;
 
         /* —— F. 空白/引号/尾随点空格（Windows 怪异点） —— */
-        case 18: set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname), "new name final.txt"); break;
-        case 19: set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname), "\"quoted new\""); break;
-        case 20: set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname), "trailingdot."); break;   /* 尾随点 */
-        
+        case 18:
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname, sizeof(pkt->pathname),
+                     "new name final.txt");
+            break;
+        case 19:
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname, sizeof(pkt->pathname),
+                     "\"quoted new\"");
+            break;
+        case 20:
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname, sizeof(pkt->pathname),
+                     "trailingdot.");
+            break;
+
         /* —— G. 编码/Unicode —— */
-        case 21: set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname),
-                                                   "new%20name.txt"); break;                    /* URL 编码空格 */
-        case 22: set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname),
-                                                   "%252e%252e%252fescape"); break;             /* 双重编码 */
-        case 23: set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname),
-                                                   "新文件名.txt"); break;                      /* 非 ASCII */
-        
-        /* —— H. 控制字符/注入（非法） —— */
-        case 24: set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname),
-                                                   "new\r\nNOOP"); break;                       /* 命令拼接探测 */
-        
-        /* —— I. 边界长度/协议违规 —— */
-        case 25: { /* 填满缓冲：重复 'B'；亦测试缺失空格情况 */
-            set_space(pkt->space,0); /* 故意去掉必需空格，考察解析器容错 */
+        case 21:
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname, sizeof(pkt->pathname),
+                     "new%20name.txt");  /* URL 编码空格 */
+            break;
+        case 22:
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname, sizeof(pkt->pathname),
+                     "%252e%252e%252fescape"); /* 双重编码 */
+            break;
+        case 23:
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname, sizeof(pkt->pathname),
+                     "新文件名.txt");
+            break;
+
+        /* —— H. 超长 pathname，但语法合法（保留空格） —— */
+        case 25: {
+            set_space(pkt->space,1);  /* 和合法 FTP 语法对齐：RNTO <SP> <pathname> */
             size_t cap = sizeof(pkt->pathname);
             if (cap > 1){
                 memset(pkt->pathname, 'B', cap-1);
@@ -1790,11 +2307,14 @@ int mutate_rnto_pathname(ftp_rnto_packet_t *pkt){
             }
             break;
         }
-        default: return 0;
+
+        default:
+            return 0;
     }
 
     return 1;
 }
+
 
 
 /* 压缩重复斜杠 */
@@ -1890,10 +2410,14 @@ int mutate_dele_pathname(ftp_dele_packet_t *pkt){
         case 22: set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname), "%252e%252e%252fescape"); break; /* 双重编码 */
         case 23: set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname), "删除我.txt"); break; /* 非 ASCII */
 
-        /* —— H. 控制字符/命令注入（非法） —— */
-        case 24: set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname), "victim\r\nNOOP"); break;
+        /* —— H. 控制字符/命令注入（原本非法，这里改成合法但“可疑”名字） —— */
+        case 24:
+            set_space(pkt->space,1);
+            /* 去掉 \r\n，保留“攻击味道”的文件名即可 */
+            set_cstr(pkt->pathname, sizeof(pkt->pathname), "victim_NOOP.txt");
+            break;
 
-        /* —— I. 边界/协议违规 —— */
+        /* —— I. 边界：超长 pathname —— */
         case 25: { /* 填满缓冲：重复 'D' */
             set_space(pkt->space,1);
             size_t cap = sizeof(pkt->pathname);
@@ -1905,21 +2429,25 @@ int mutate_dele_pathname(ftp_dele_packet_t *pkt){
             }
             break;
         }
-        case 26: { /* 故意去掉必需空格（协议错误探测） */
-            set_space(pkt->space,0);
+
+        case 26: { /* 原来故意去掉必需空格，这里改成语法合法 */
+            set_space(pkt->space,1);  /* 保证有必需的 <SP> */
             set_cstr(pkt->pathname, sizeof(pkt->pathname), "no-space.txt");
             break;
         }
-        case 27: { /* 空字符串（缺参） */
+
+        case 27: { /* 原来是空字符串（缺参），改成最小合法 pathname */
             set_space(pkt->space,1);
-            set_cstr(pkt->pathname, sizeof(pkt->pathname), "");
+            set_cstr(pkt->pathname, sizeof(pkt->pathname), "dele-target"); /* 任意非空文件名 */
             break;
         }
+
         default: return 0;
     }
 
     return 1;
 }
+
 
 
 
@@ -2008,10 +2536,14 @@ int mutate_rmd_pathname(ftp_rmd_packet_t *pkt){
         case 25: set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname), "%2e%2e/%2e%2e/escape"); break;/* 编码遍历 */
         case 26: set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname), "删除我"); break;               /* 非 ASCII */
 
-        /* —— H. 控制字符/协议拼接（非法） —— */
-        case 27: set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname), "victim\r\nNOOP"); break;
+        /* —— H. 控制字符/协议拼接（原本非法，这里改成合法但“可疑”名字） —— */
+        case 27:
+            set_space(pkt->space,1);
+            /* 去掉 \r\n，保留“攻击味道”的名字 */
+            set_cstr(pkt->pathname, sizeof(pkt->pathname), "victim_NOOP_dir");
+            break;
 
-        /* —— I. 长度/协议违规 —— */
+        /* —— I. 长度/边界 —— */
         case 28: { /* 极限长度：填满缓冲（全部 'R'） */
             set_space(pkt->space,1);
             size_t cap = sizeof(pkt->pathname);
@@ -2023,13 +2555,15 @@ int mutate_rmd_pathname(ftp_rmd_packet_t *pkt){
             }
             break;
         }
-        case 29: { /* 去掉必需空格（语法错误）或空参数 */
-            if (op_idx & 1){
-                set_space(pkt->space,0);                    /* 无空格 */
-                set_cstr(pkt->pathname, sizeof(pkt->pathname), "nospaceDir");
-            }else{
-                set_space(pkt->space,1);
-                set_cstr(pkt->pathname, sizeof(pkt->pathname), "");  /* 空 pathname */
+
+        case 29: { /* 原来是“去掉空格 / 空 pathname”，改成正常的合法目录名 */
+            set_space(pkt->space,1);  /* 保证存在必需空格 */
+            if (orig[0]) {
+                /* 基于原名构造一个“to_delete” 目录 */
+                size_t cap = sizeof(pkt->pathname);
+                (void)snprintf(pkt->pathname, cap, "%s_to_delete", orig);
+            } else {
+                set_cstr(pkt->pathname, sizeof(pkt->pathname), "rmd-target");
             }
             break;
         }
@@ -2039,7 +2573,6 @@ int mutate_rmd_pathname(ftp_rmd_packet_t *pkt){
 
     return 1;
 }
-
 
 
 
@@ -2126,10 +2659,14 @@ int mutate_mkd_pathname(ftp_mkd_packet_t *pkt){
         case 25: set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname), "new%20dir"); break;  /* URL 编码空格 */
         case 26: set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname), "新建目录"); break;     /* 非 ASCII */
 
-        /* —— H. 控制字符/协议拼接（非法） —— */
-        case 27: set_space(pkt->space,1); set_cstr(pkt->pathname, sizeof(pkt->pathname), "new\r\nLIST"); break;
+        /* —— H. 控制字符/协议拼接（原本非法，这里改成合法但“可疑”名字） —— */
+        case 27:
+            set_space(pkt->space,1);
+            /* 去掉 \r\n，只保留“带 LIST 味道”的名字 */
+            set_cstr(pkt->pathname, sizeof(pkt->pathname), "new_LIST_dir");
+            break;
 
-        /* —— I. 长度/协议违规 —— */
+        /* —— I. 长度/边界 —— */
         case 28: { /* 极限长度：填满缓冲（全部 'M'） */
             set_space(pkt->space,1);
             size_t cap = sizeof(pkt->pathname);
@@ -2141,25 +2678,18 @@ int mutate_mkd_pathname(ftp_mkd_packet_t *pkt){
             }
             break;
         }
-        case 29: { /* 去掉必需空格或空实参；或构造很多层级 */
-            if ((op_idx & 1) == 0){
-                set_space(pkt->space,0);                    /* 无空格：语法错误 */
-                set_cstr(pkt->pathname, sizeof(pkt->pathname), "nospaceDir");
-            } else if ((op_idx & 2) == 0){
-                set_space(pkt->space,1);                    /* 空 pathname：语法错误 */
-                set_cstr(pkt->pathname, sizeof(pkt->pathname), "");
-            } else {
-                set_space(pkt->space,1);                    /* 过多分段 */
-                pkt->pathname[0] = '\0';
-                size_t cap = sizeof(pkt->pathname);
-                size_t len = 0;
-                while (len + 2 < cap){                      /* 反复追加 "/a" */
-                    pkt->pathname[len++] = '/';
-                    if (len+1 >= cap) break;
-                    pkt->pathname[len++] = 'a';
-                }
-                pkt->pathname[len] = '\0';
+        case 29: { /* 很多层级的长路径，保持语法合法 */
+            set_space(pkt->space,1);
+            pkt->pathname[0] = '\0';
+            size_t cap = sizeof(pkt->pathname);
+            size_t len = 0;
+            /* 反复追加 "/a" 直到接近上限 */
+            while (len + 2 < cap){
+                pkt->pathname[len++] = '/';
+                if (len + 1 >= cap) break;
+                pkt->pathname[len++] = 'a';
             }
+            pkt->pathname[len] = '\0';
             break;
         }
 
@@ -2168,6 +2698,7 @@ int mutate_mkd_pathname(ftp_mkd_packet_t *pkt){
 
     return 1;
 }
+
 
 
 
@@ -2187,7 +2718,7 @@ int delete_list_pathname(ftp_list_packet_t *pkt){
     return 1;
 }
 
-/* 4) 充分变异器：在原始输入基础上做多样化（合法/非法）变异 */
+/* 4) 充分变异器：在原始输入基础上做多样化（保持语法合法的 LIST 变异） */
 int mutate_list_pathname(ftp_list_packet_t *pkt){
     if (!pkt) return 0;
 
@@ -2206,7 +2737,7 @@ int mutate_list_pathname(ftp_list_packet_t *pkt){
         case 3:  set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "/var/www"); break;       /* 绝对路径 */
         case 4:  set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "sub/dir"); break;        /* 相对多级 */
 
-        /* —— 服务器常见LIST选项（GNU ls 风格，很多FTP服务端兼容） —— */
+        /* —— 服务器常见 LIST 选项（GNU ls 风格，很多 FTP 服务端兼容） —— */
         case 5:  set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "-l"); break;
         case 6:  set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "-la"); break;
         case 7:  set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "-alh"); break;
@@ -2225,47 +2756,63 @@ int mutate_list_pathname(ftp_list_packet_t *pkt){
         /* —— 平台差异/分隔符混用 —— */
         case 15: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "C:\\\\Users\\\\Public"); break;
         case 16: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "\\\\server\\share"); break; /* UNC */
-        case 17: { set_space(pkt->space,1);
-                   set_cstr(pkt->pathname,sizeof(pkt->pathname), orig[0]?orig:"/a/b/c");
-                   swap_separators(pkt->pathname);
-                   break; }
+        case 17: {
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname,sizeof(pkt->pathname), orig[0]?orig:"/a/b/c");
+            swap_separators(pkt->pathname);
+            break;
+        }
 
-        /* —— 编码/遍历/特殊字符 —— */
+        /* —— 编码/遍历/特殊字符（但不再做 CRLF 注入） —— */
         case 18: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "dir%20with%20space"); break;
         case 19: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "%2e%2e/%2e%2e"); break;    /* 编码遍历 */
-        case 20: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "foo\r\nSTAT"); break;      /* 控制字符注入 */
+        case 20: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "foo_STAT"); break;         /* 可疑名字，但单条命令 */
 
         /* —— 分隔压缩/混排 —— */
-        case 21: { set_space(pkt->space,1);
-                   const char *src = orig[0]?orig:"a////b\\\\\\\\c////";
-                   collapse_slashes(src, pkt->pathname, sizeof(pkt->pathname));
-                   break; }
+        case 21: {
+            set_space(pkt->space,1);
+            const char *src = orig[0]?orig:"a////b\\\\\\\\c////";
+            collapse_slashes(src, pkt->pathname, sizeof(pkt->pathname));
+            break;
+        }
         case 22: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "a\\\\b/c//d"); break;
 
         /* —— 长度边界/层级爆炸 —— */
         case 23: { /* 极限长度：填满缓冲 */
             set_space(pkt->space,1);
             size_t cap = sizeof(pkt->pathname);
-            if (cap > 1){ memset(pkt->pathname, 'L', cap-1); pkt->pathname[cap-1]='\0'; }
-            else set_cstr(pkt->pathname, cap, "");
+            if (cap > 1){
+                memset(pkt->pathname, 'L', cap-1);
+                pkt->pathname[cap-1]='\0';
+            } else {
+                set_cstr(pkt->pathname, cap, "");
+            }
             break;
         }
         case 24: { /* 过多层级直到接近上限 */
             set_space(pkt->space,1);
             pkt->pathname[0] = '\0';
             size_t cap = sizeof(pkt->pathname), len = 0;
-            while (len + 2 < cap){ pkt->pathname[len++] = '/'; if (len+1>=cap) break; pkt->pathname[len++] = 'a'; }
+            while (len + 2 < cap){
+                pkt->pathname[len++] = '/';
+                if (len+1>=cap) break;
+                pkt->pathname[len++] = 'a';
+            }
             pkt->pathname[len] = '\0';
             break;
         }
 
-        /* —— 协议级错误：去掉空格但给出路径 —— */
-        case 25: set_space(pkt->space,0); set_cstr(pkt->pathname,sizeof(pkt->pathname), "nospace_arg"); break;
+        /* —— 无参数合法形式：LIST<CRLF> —— */
+        case 25:
+            set_space(pkt->space,0);           /* 无空格 */
+            pkt->pathname[0] = '\0';           /* 无参数 */
+            break;
 
         default: return 0;
     }
     return 1;
 }
+
 
 
 /*** 2) add/delete: 针对可选 pathname 字段 ***/
@@ -2284,7 +2831,7 @@ int delete_nlst_pathname(ftp_nlst_packet_t *pkt){
     return 1;
 }
 
-/*** 4) 充分变异器（合法/非法混合，覆盖多种场景与边界） ***/
+/*** 4) 充分变异器（只生成语法合法的 NLST 命令） ***/
 int mutate_nlst_pathname(ftp_nlst_packet_t *pkt){
     if (!pkt) return 0;
 
@@ -2312,10 +2859,10 @@ int mutate_nlst_pathname(ftp_nlst_packet_t *pkt){
         case 10: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), ".*"); break;
         case 11: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "[0-9]*"); break;
 
-        /* —— 可能被服务器支持但非标准：选项/组合（非法/兼容性待定） —— */
-        case 12: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "-a"); break;     /* 显示隐藏 */
-        case 13: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "-R"); break;     /* 递归 */
-        case 14: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "-a /etc"); break;/* 选项+路径 */
+        /* —— 类 LIST 选项（语法仍是 NLST SP <string>） —— */
+        case 12: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "-a"); break;     
+        case 13: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "-R"); break;     
+        case 14: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "-a /etc"); break;
 
         /* —— 空白/引号/带空格名称 —— */
         case 15: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "\"My Folder\""); break;
@@ -2324,47 +2871,65 @@ int mutate_nlst_pathname(ftp_nlst_packet_t *pkt){
         /* —— 平台差异路径 —— */
         case 17: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "C:\\\\Temp\\\\"); break;
         case 18: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "\\\\server\\share"); break;
-        case 19: { set_space(pkt->space,1);
-                   set_cstr(pkt->pathname,sizeof(pkt->pathname), orig[0]?orig:"a/b\\c\\d/e");
-                   swap_separators(pkt->pathname);
-                   break; }
+        case 19: {
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname,sizeof(pkt->pathname), orig[0]?orig:"a/b\\c\\d/e");
+            swap_separators(pkt->pathname);
+            break;
+        }
 
-        /* —— 编码/遍历/控制字符注入（非法/畸形） —— */
+        /* —— 编码/遍历（仍作为 pathname 文本） —— */
         case 20: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "dir%20with%20space"); break;
-        case 21: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "%2e%2e/%2e%2e"); break; /* 编码遍历 */
-        case 22: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "foo\r\nSTAT"); break;   /* 命令注入 */
+        case 21: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "%2e%2e/%2e%2e"); break;
+
+        /* 原来这里是 "foo\r\nSTAT"，会拆成两条命令，改成一个单纯可疑名字 */
+        case 22: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "foo_STAT"); break;
 
         /* —— 分隔压缩/混排 —— */
-        case 23: { set_space(pkt->space,1);
-                   const char *src = orig[0]?orig:"a////b\\\\\\\\c////";
-                   collapse_slashes(src, pkt->pathname, sizeof(pkt->pathname));
-                   break; }
+        case 23: {
+            set_space(pkt->space,1);
+            const char *src = orig[0]?orig:"a////b\\\\\\\\c////";
+            collapse_slashes(src, pkt->pathname, sizeof(pkt->pathname));
+            break;
+        }
         case 24: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "a\\\\b/c//d"); break;
 
         /* —— 长度与层级边界 —— */
         case 25: { /* 极限长度填充 */
             set_space(pkt->space,1);
             size_t cap = sizeof(pkt->pathname);
-            if (cap > 1){ memset(pkt->pathname, 'N', cap-1); pkt->pathname[cap-1]='\0'; }
-            else set_cstr(pkt->pathname, cap, "");
+            if (cap > 1){
+                memset(pkt->pathname, 'N', cap-1);
+                pkt->pathname[cap-1]='\0';
+            } else {
+                set_cstr(pkt->pathname, cap, "");
+            }
             break;
         }
         case 26: { /* 层级爆炸直至接近上限 */
             set_space(pkt->space,1);
             pkt->pathname[0] = '\0';
             size_t cap = sizeof(pkt->pathname), len = 0;
-            while (len + 2 < cap){ pkt->pathname[len++] = '/'; if (len+1>=cap) break; pkt->pathname[len++] = 'n'; }
+            while (len + 2 < cap){
+                pkt->pathname[len++] = '/';
+                if (len+1>=cap) break;
+                pkt->pathname[len++] = 'n';
+            }
             pkt->pathname[len] = '\0';
             break;
         }
 
-        /* —— 协议级故障：不给空格却有实参 —— */
-        case 27: set_space(pkt->space,0); set_cstr(pkt->pathname,sizeof(pkt->pathname), "nospace_arg"); break;
+        /* —— 无参数合法形式：NLST<CRLF> —— */
+        case 27:
+            set_space(pkt->space,0);         /* 无空格 */
+            pkt->pathname[0] = '\0';         /* 无参数 */
+            break;
 
         default: return 0;
     }
     return 1;
 }
+
 
 
 
@@ -2384,7 +2949,7 @@ static void squeeze_spaces(const char *src, char *dst, size_t cap){
     dst[i]='\0';
 }
 
-/*** 充分变异器（轮转执行多种算子；必要时也会对 space 做非法变异） ***/
+/*** 充分变异器（轮转执行多种算子；保持 SITE 行语法合法：SITE SP <parameters>） ***/
 int mutate_site_parameters(ftp_site_packet_t *pkt){
     if (!pkt) return 0;
 
@@ -2416,15 +2981,33 @@ int mutate_site_parameters(ftp_site_packet_t *pkt){
         case 14: set_space(pkt->space,1); set_cstr(pkt->parameters,sizeof(pkt->parameters), "MSG Hello World"); break;
 
         /* —— 格式/空白/大小写相关 —— */
-        case 15: set_space(pkt->space,1); set_cstr(pkt->parameters,sizeof(pkt->parameters), "   chmod    644\tfoo.txt  "); squeeze_spaces(pkt->parameters, pkt->parameters, sizeof(pkt->parameters)); break;
-        case 16: set_space(pkt->space,1); set_cstr(pkt->parameters,sizeof(pkt->parameters), orig[0]?orig:"ChMoD 7a5 bad"); toggle_case(pkt->parameters); break;
-        case 17: set_space(pkt->space,1); set_cstr(pkt->parameters,sizeof(pkt->parameters), "\"Folder With Spaces\""); break;
-        case 18: set_space(pkt->space,1); set_cstr(pkt->parameters,sizeof(pkt->parameters), "CHMOD\t700\tfolder"); break;
+        case 15:
+            set_space(pkt->space,1);
+            set_cstr(pkt->parameters,sizeof(pkt->parameters),
+                     "   chmod    644\tfoo.txt  ");
+            squeeze_spaces(pkt->parameters, pkt->parameters, sizeof(pkt->parameters));
+            break;
+        case 16:
+            set_space(pkt->space,1);
+            set_cstr(pkt->parameters,sizeof(pkt->parameters),
+                     orig[0]?orig:"ChMoD 7a5 bad");
+            toggle_case(pkt->parameters);
+            break;
+        case 17:
+            set_space(pkt->space,1);
+            set_cstr(pkt->parameters,sizeof(pkt->parameters),
+                     "\"Folder With Spaces\"");
+            break;
+        case 18:
+            set_space(pkt->space,1);
+            set_cstr(pkt->parameters,sizeof(pkt->parameters),
+                     "CHMOD\t700\tfolder");
+            break;
 
-        /* —— 数值边界/类型错误 —— */
-        case 19: set_space(pkt->space,1); set_cstr(pkt->parameters,sizeof(pkt->parameters), "UMASK 999"); break;   /* 超范围 */
-        case 20: set_space(pkt->space,1); set_cstr(pkt->parameters,sizeof(pkt->parameters), "IDLE -10"); break;   /* 负数 */
-        case 21: set_space(pkt->space,1); set_cstr(pkt->parameters,sizeof(pkt->parameters), "IDLE 3.14159"); break; /* 浮点 */
+        /* —— 数值边界/类型错误（语义可能非法，但语法仍是单行参数） —— */
+        case 19: set_space(pkt->space,1); set_cstr(pkt->parameters,sizeof(pkt->parameters), "UMASK 999"); break;
+        case 20: set_space(pkt->space,1); set_cstr(pkt->parameters,sizeof(pkt->parameters), "IDLE -10"); break;
+        case 21: set_space(pkt->space,1); set_cstr(pkt->parameters,sizeof(pkt->parameters), "IDLE 3.14159"); break;
         case 22: { /* 极长数字（溢出） */
             set_space(pkt->space,1);
             memset(pkt->parameters, '9', sizeof(pkt->parameters)-1);
@@ -2435,13 +3018,30 @@ int mutate_site_parameters(ftp_site_packet_t *pkt){
         /* —— 编码/奇异字符/国际化 —— */
         case 23: set_space(pkt->space,1); set_cstr(pkt->parameters,sizeof(pkt->parameters), "CHMOD 640 /path/with%20space"); break;
         case 24: set_space(pkt->space,1); set_cstr(pkt->parameters,sizeof(pkt->parameters), "CHMOD 755 /数据/文件"); break; /* UTF-8 */
-        case 25: set_space(pkt->space,1); set_cstr(pkt->parameters,sizeof(pkt->parameters), "SETTYPE X"); break;  /* 非法类型 */
+        case 25: set_space(pkt->space,1); set_cstr(pkt->parameters,sizeof(pkt->parameters), "SETTYPE X"); break;  /* 非法类型但语法OK */
 
-        /* —— 注入/控制字符/协议畸形 —— */
-        case 26: set_space(pkt->space,1); set_cstr(pkt->parameters,sizeof(pkt->parameters), "HELP\r\nSTAT"); break; /* CRLF 注入 */
-        case 27: set_space(pkt->space,1); set_cstr(pkt->parameters,sizeof(pkt->parameters), "CHMOD 700 ../../tmp/x"); break; /* 遍历意图 */
-        case 28: set_space(pkt->space,1); set_cstr(pkt->parameters,sizeof(pkt->parameters), "JSON {\"cmd\":\"CHMOD\",\"mode\":511,\"path\":\"/var/tmp/x\"}"); break;
-        case 29: set_space(pkt->space,1); set_cstr(pkt->parameters,sizeof(pkt->parameters), "KEY=VALUE;MODE=755;PATH=/var/tmp/x"); break;
+        /* —— 原本是 CRLF 注入：改成单行可疑参数 —— */
+        case 26:
+            set_space(pkt->space,1);
+            /* 不再包含 \r\n，只保留为一个“奇怪”的 HELP 变体 */
+            set_cstr(pkt->parameters,sizeof(pkt->parameters), "HELP STAT");
+            break;
+
+        case 27:
+            set_space(pkt->space,1);
+            set_cstr(pkt->parameters,sizeof(pkt->parameters),
+                     "CHMOD 700 ../../tmp/x");
+            break;
+        case 28:
+            set_space(pkt->space,1);
+            set_cstr(pkt->parameters,sizeof(pkt->parameters),
+                     "JSON {\"cmd\":\"CHMOD\",\"mode\":511,\"path\":\"/var/tmp/x\"}");
+            break;
+        case 29:
+            set_space(pkt->space,1);
+            set_cstr(pkt->parameters,sizeof(pkt->parameters),
+                     "KEY=VALUE;MODE=755;PATH=/var/tmp/x");
+            break;
 
         /* —— 长度边界/缓冲类 —— */
         case 30: { /* 充满 A 的极限长度 */
@@ -2450,9 +3050,12 @@ int mutate_site_parameters(ftp_site_packet_t *pkt){
             pkt->parameters[sizeof(pkt->parameters)-1] = '\0';
             break;
         }
-        case 31: { /* 协议级错误：去掉必须空格（构造异常帧） */
-            set_space(pkt->space,0);
-            set_cstr(pkt->parameters,sizeof(pkt->parameters), "CHMOD 600 /no/space/prefix");
+
+        /* —— 原本是去掉必须空格：改为正常有空格的合法形式 —— */
+        case 31: {
+            set_space(pkt->space,1);   /* 不再构造“无空格”的非法报文 */
+            set_cstr(pkt->parameters,sizeof(pkt->parameters),
+                     "CHMOD 600 /no/space/prefix");
             break;
         }
 
@@ -2460,6 +3063,7 @@ int mutate_site_parameters(ftp_site_packet_t *pkt){
     }
     return 1;
 }
+
 
 
 /* —— 可选字段 mutators —— */
@@ -2475,7 +3079,7 @@ void delete_stat_pathname(ftp_stat_packet_t *pkt){
     set_space(pkt->space, 0);                            /* 同时移除可选空格 */
 }
 
-/* —— 充分变异器：轮转多种算子 —— */
+/* —— 充分变异器：轮转多种算子（保持 STAT 行语法合法：STAT [SP <path>]） —— */
 int mutate_stat_pathname(ftp_stat_packet_t *pkt){
     if (!pkt) return 0;
 
@@ -2497,21 +3101,30 @@ int mutate_stat_pathname(ftp_stat_packet_t *pkt){
         case 6:  set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "[a-zA-Z]*.log"); break;
 
         /* 平台/路径风格差异 */
-        case 7:  set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "C:\\\\Windows\\\\System32\\\\drivers\\\\etc\\\\hosts"); break;
-        case 8:  set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "\\\\SERVER\\share\\folder\\file"); break;
+        case 7:  set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname),
+                                                  "C:\\\\Windows\\\\System32\\\\drivers\\\\etc\\\\hosts"); break;
+        case 8:  set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname),
+                                                  "\\\\SERVER\\share\\folder\\file"); break;
 
         /* 空白/引号/转义 */
-        case 9:  set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "\"My Folder/file name.txt\""); break;
-        case 10: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "path/with%20space"); break;
+        case 9:  set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname),
+                                                  "\"My Folder/file name.txt\""); break;
+        case 10: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname),
+                                                  "path/with%20space"); break;
 
         /* 遍历/可疑路径 */
-        case 11: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "../../etc/passwd"); break;
-        case 12: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "////a///b//c/"); break;
-        case 13: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "./././target"); break;
+        case 11: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname),
+                                                  "../../etc/passwd"); break;
+        case 12: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname),
+                                                  "////a///b//c/"); break;
+        case 13: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname),
+                                                  "./././target"); break;
 
         /* 非 ASCII / UTF-8 */
-        case 14: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "/数据/文件.txt"); break;
-        case 15: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "/tmp/😀.txt"); break;
+        case 14: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname),
+                                                  "/数据/文件.txt"); break;
+        case 15: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname),
+                                                  "/tmp/😀.txt"); break;
 
         /* 长度/缓冲边界 */
         case 16: { /* 极限长度填充 */
@@ -2522,16 +3135,33 @@ int mutate_stat_pathname(ftp_stat_packet_t *pkt){
         }
         case 17: { /* 深层嵌套 */
             set_space(pkt->space,1);
-            char *p = pkt->pathname; size_t cap = sizeof(pkt->pathname); size_t used = 0;
+            char *p = pkt->pathname;
+            size_t cap = sizeof(pkt->pathname);
+            size_t used = 0;
             const char *seg = "deep/";
-            while (used + strlen(seg) + 1 < cap){ strcpy(p+used, seg); used += strlen(seg); }
-            if (used+5 < cap) strcpy(p+used, "end");
+            if (cap == 0) break;
+            p[0] = '\0';
+            while (used + strlen(seg) + 1 < cap){
+                strcpy(p + used, seg);
+                used += strlen(seg);
+            }
+            if (used + 4 < cap) strcpy(p + used, "end");
             break;
         }
 
-        /* 控制字符/注入 */
-        case 18: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "path\r\nANOTHER"); break;
-        case 19: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "/tmp/\x1b[31mred\x1b[0m"); break;
+        /* 控制字符/注入：改成“文字形式”而非真实 CRLF */
+        case 18:
+            set_space(pkt->space,1);
+            /* 不再真正插入 \r\n，而是让路径字符串里出现可疑字样 */
+            set_cstr(pkt->pathname,sizeof(pkt->pathname),
+                     "path_^M^J_ANOTHER");
+            break;
+
+        case 19:
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname,sizeof(pkt->pathname),
+                     "/tmp/\x1b[31mred\x1b[0m");
+            break;
 
         /* 特殊文件/保留名 */
         case 20: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "/dev/null"); break;
@@ -2543,25 +3173,42 @@ int mutate_stat_pathname(ftp_stat_packet_t *pkt){
         case 24: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "file{1..100}"); break;
 
         /* 空白边界/裁剪相关 */
-        case 25: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "  trailing-space  "); break;
+        case 25:
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname,sizeof(pkt->pathname),
+                     "  trailing-space  ");
+            break;
 
         /* 基于原值的微扰（保留/利用已有测试用例） */
-        case 26: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), orig[0]?orig:"relative.txt"); toggle_case(pkt->pathname); break;
+        case 26:
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname,sizeof(pkt->pathname),
+                     orig[0]?orig:"relative.txt");
+            toggle_case(pkt->pathname);
+            break;
 
-        /* 协议畸形：带路径但去掉空格（测试解析器健壮性） */
-        case 27: set_space(pkt->space,0); set_cstr(pkt->pathname,sizeof(pkt->pathname), "/no/leading/space"); break;
+        /* 原本是“去掉空格”的协议畸形，这里改为语法合法但名字可疑 */
+        case 27:
+            set_space(pkt->space,1);
+            set_cstr(pkt->pathname,sizeof(pkt->pathname), "nospace_arg");
+            break;
 
         /* 其他边角 */
         case 28: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "\"unterminated"); break;
         case 29: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "path/with#hash?query=1"); break;
         case 30: set_space(pkt->space,1); set_cstr(pkt->pathname,sizeof(pkt->pathname), "CONIN$"); break;
-        case 31: /* 无参数形态：即“STAT”纯服务器状态 */
-                 set_space(pkt->space,0); set_cstr(pkt->pathname,sizeof(pkt->pathname), ""); break;
+
+        /* 无参数形态：即“STAT\r\n” 纯服务器状态 */
+        case 31:
+            set_space(pkt->space,0);  /* 无空格 */
+            set_cstr(pkt->pathname,sizeof(pkt->pathname), "");
+            break;
 
         default: return 0;
     }
     return 1;
 }
+
 
 
 /* —— 可选字段 mutators —— */

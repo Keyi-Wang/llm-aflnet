@@ -155,8 +155,38 @@ static uri_mut_fn k_ops[] = {
 };
 
 static size_t num_ops(void){ return sizeof(k_ops)/sizeof(k_ops[0]); }
+static const int k_base_weights[12] = {
+    100, /* 0: absolute_valid — 合法 */
+    100, /* 1: asterisk — 合法（仅 OPTIONS 保留） */
+      0, /* 2: empty — 非法 */
+      0, /* 3: very_long_path — 非法/边界 */
+      0, /* 4: traversal — 非法 */
+      0, /* 5: percent_encoding（含 %00/%FF）— 非法 */
+    100, /* 6: utf8 — 合法 */
+    100, /* 7: ipv6_edge_port — 合法 */
+      0, /* 8: userinfo（端口0等）— 非法 */
+      0, /* 9: scheme_variants（非标准）— 非法 */
+      0, /*10: query_fragment（含#）— 非法 */
+      0  /*11: illegal_chars_inject（CRLF 注入）— 非法 */
+};
 
-/* === 对 rtsp_packet_t 数组就地变异：对每个包选一个算子 === */
+/* 简单按权重选择（总权重<=0时退回0） */
+static size_t weighted_pick_idx(const int *w, size_t n){
+    long total = 0;
+    for(size_t i=0;i<n;++i) total += (w[i] > 0 ? w[i] : 0);
+    if(total <= 0) return 0;
+    long r = rand() % total;
+    long acc = 0;
+    for(size_t i=0;i<n;++i){
+        int wi = (w[i] > 0 ? w[i] : 0);
+        if(wi == 0) continue;
+        acc += wi;
+        if(r < acc) return i;
+    }
+    return 0;
+}
+
+/* === 对 rtsp_packet_t 数组就地变异：对每个包选一个算子（仅选择“合法”） === */
 void mutate_request_uri(rtsp_packet_t *pkts, size_t n) {
     if (!pkts) return;
     /* 随机性：也可传入外部种子，或使用确定性顺序 */
@@ -167,25 +197,24 @@ void mutate_request_uri(rtsp_packet_t *pkts, size_t n) {
         char* uri = get_request_uri_ptr(&pkts[i]);
         if (!uri) continue;
 
-        /* 基于类型做一点点语义选择（举例） */
-        size_t op_idx;
-        switch (pkts[i].type) {
-            case RTSP_TYPE_OPTIONS:
-                /* OPTIONS 常用 '*'，混入其它随机变异 */
-                op_idx = (rand()%3==0) ? 1 : (size_t)(rand() % num_ops());
-                break;
-            case RTSP_TYPE_SETUP:
-                /* SETUP 更常见绝对/相对路径，少量非法混入 */
-                op_idx = (rand()%2==0) ? 0 : (size_t)(rand() % num_ops());
-                break;
-            default:
-                op_idx = (size_t)(rand() % num_ops());
-                break;
+        /* 基于请求类型的动态权重：确保只选“合法” */
+        int w[12];
+        for(size_t j=0;j<12;++j) w[j] = k_base_weights[j];
+
+        /* '*' 只对 OPTIONS 合法；其它方法禁用该算子 */
+        if (pkts[i].type != RTSP_TYPE_OPTIONS) {
+            w[1] = 0; /* mut_op_asterisk */
         }
 
+        /* 如需进一步按方法限制，可在此追加：
+           - 对 ANNOUNCE/SETUP 等只允许绝对 URI：保留 w[0], w[6], w[7] 其余清零
+           - 对某些实现不接受 UTF-8：可将 w[6]=0
+        */
+
+        size_t op_idx = weighted_pick_idx(w, num_ops());
         k_ops[op_idx](uri);
 
-        /* 可选：确保首尾没有空白，避免影响行格式（若你的序列化器不健壮可启用）
+        /* 可选：去除首尾空白
         size_t L = strlen(uri);
         while (L>0 && (uri[L-1]==' '||uri[L-1]=='\t')) uri[--L]='\0';
         if (uri[0]==' '||uri[0]=='\t') memmove(uri, uri+1, L);
@@ -309,42 +338,68 @@ static void op_non_monotonic_series(rtsp_packet_t *arr, size_t n) {
     }
 }
 
-/* —— 公开的 mutator：对 rtsp_packet_t 数组进行就地变异 —— */
+/* —— 公开的 mutator：对 rtsp_packet_t 数组进行就地变异（仅合法变异） —— */
 void mutate_cseq(rtsp_packet_t *pkts, size_t n) {
     if (!pkts) return;
     static int seeded = 0;
     if (!seeded) { srand((unsigned)time(NULL)); seeded = 1; }
 
-    /* 10+ 单包算子 */
+    /* 单包算子表 */
     typedef void (*one_fn)(cseq_header_rtsp_t*);
     one_fn single_ops[] = {
-        op_valid_increment,
-        op_zero,
-        op_negative,
-        op_int_max,
-        op_int_min,
-        op_large_jump_overflow,
-        op_random_32,
-        op_flip_lowbit,
-        op_off_by_one_zero,
-        op_missing_header,
-        op_bad_name_spelling,
-        op_bad_colon_space,
-        op_bad_crlf,
+        op_valid_increment,    /* 0  合法 */
+        op_zero,               /* 1  非法 */
+        op_negative,           /* 2  非法 */
+        op_int_max,            /* 3  合法 */
+        op_int_min,            /* 4  非法 */
+        op_large_jump_overflow,/* 5  非法 */
+        op_random_32,          /* 6  非法 */
+        op_flip_lowbit,        /* 7  非法（可能变0/负） */
+        op_off_by_one_zero,    /* 8  非法（可能置0） */
+        op_missing_header,     /* 9  非法 */
+        op_bad_name_spelling,  /* 10 非法 */
+        op_bad_colon_space,    /* 11 非法 */
+        op_bad_crlf            /* 12 非法 */
     };
     const size_t single_cnt = sizeof(single_ops)/sizeof(single_ops[0]);
 
-    /* 20% 概率做一次“跨数组”的非单调序列攻击 */
-    if (n > 1 && (rand()%5==0)) {
+    /* 单包权重：合法=100，非法=0 */
+    static const int weights_single[13] = {
+        100, /* 0: increment */
+          0, /* 1: zero (非法) */
+          0, /* 2: negative (非法) */
+        100, /* 3: INT_MAX (合法边界) */
+          0, /* 4: INT_MIN (非法) */
+          0, /* 5: 溢出/环绕 (非法) */
+          0, /* 6: 随机32 (可能负/非法) */
+          0, /* 7: 翻转低位 (可能非法) */
+          0, /* 8: 1→0 (非法) */
+          0, /* 9: 缺失头 (非法) */
+          0, /*10: 名字拼写错误 (非法) */
+          0, /*11: 冒号/空格错误 (非法) */
+          0  /*12: CRLF 错误 (非法) */
+    };
+
+    /* 顶层策略：跨数组“非单调序列”属于非法，这里权重为 0（直接禁用） */
+    const int weight_series = 0;
+
+    if (n > 1 && weight_series > 0) {
+        /* 当前策略下不会走到这里；如需启用，将上面权重设为非 0 即可 */
         op_non_monotonic_series(pkts, n);
         return;
     }
 
-    /* 否则逐包随机选择一个算子 */
+    /* 仅选择合法的单包算子 */
     for (size_t i = 0; i < n; ++i) {
         cseq_header_rtsp_t *h = get_cseq_header_ptr(&pkts[i]);
-        size_t idx = (size_t)(rand() % single_cnt);
+        size_t idx = weighted_pick_idx(weights_single, single_cnt);
         single_ops[idx](h);
+
+        /* 额外稳健性（可选）：若出现 <=0，则回退为 1 */
+        if (h->number <= 0) {
+            ensure_header_shape(h);
+            h->number = 1;
+        }
     }
 }
 
@@ -539,8 +594,62 @@ static acc_fn k_acc_ops[] = {
     acc_illegal_token,
 };
 static size_t acc_ops_count(void){ return sizeof(k_acc_ops)/sizeof(k_acc_ops[0]); }
+static size_t weighted_pick_idx_accept(const int *weights, size_t n_ops) {
+    if (!weights || n_ops == 0) {
+        return 0;  /* 防御式返回 */
+    }
 
-/* 对 rtsp_packet_t 数组进行就地变异 */
+    long long total = 0;
+
+    /* 1) 计算所有正权重之和 */
+    for (size_t i = 0; i < n_ops; i++) {
+        if (weights[i] > 0) {
+            total += weights[i];
+        }
+    }
+
+    /* 2) 如果所有权重都 <= 0，则退化成均匀随机 */
+    if (total <= 0) {
+        return (size_t)(rand() % n_ops);
+    }
+
+    /* 3) 在 [0, total) 中选一个随机数 */
+    long long r = rand() % total;
+    long long acc = 0;
+
+    /* 4) 累加权重，找到落点对应的下标 */
+    for (size_t i = 0; i < n_ops; i++) {
+        if (weights[i] <= 0) {
+            continue;   /* 权重 <= 0 的 op 不参与选择 */
+        }
+        acc += weights[i];
+        if (r < acc) {
+            return i;
+        }
+    }
+
+    /* 理论上不会走到这里，保险起见返回最后一个 */
+    return n_ops - 1;
+}
+/* —— 合法=100，非法/畸形=0 —— */
+static const int weights_accept_ops[14] = {
+    100, /* 0: acc_set_valid_sdp        — Accept: application/sdp */
+    100, /* 1: acc_set_wildcard_any     — Accept:               */
+    100, /* 2: acc_set_with_params      — Accept: application/sdp;... */
+      0, /* 3: acc_missing_subtype      — 缺少 subtype（非法） */
+      0, /* 4: acc_missing_slash        — 缺少 '/'（非法） */
+      0, /* 5: acc_bad_name             — 错拼/大小写（此实现视为非法） */
+      0, /* 6: acc_bad_sep              — 冒号/空格分隔错误（非法） */
+      0, /* 7: acc_empty                — 空值（非法） */
+      0, /* 8: acc_delete               — 删除头（非法） */
+    100, /* 9: acc_multi_values_in_one  — 合法：逗号分隔多值 */
+      0, /*10: acc_super_long           — 超长（边界/攻击，置0） */
+      0, /*11: acc_non_ascii            — 非 ASCII token（非法） */
+      0, /*12: acc_inject_crlf          — CRLF 注入（非法） */
+      0  /*13: acc_illegal_token        — 逗号/空格嵌入 token（非法） */
+};
+
+/* 对 rtsp_packet_t 数组进行就地变异（仅挑选“合法”Accept 变体） */
 void mutate_accept(rtsp_packet_t *pkts, size_t n){
     if(!pkts) return;
     static int seeded=0; if(!seeded){ srand((unsigned)time(NULL)); seeded=1; }
@@ -548,8 +657,12 @@ void mutate_accept(rtsp_packet_t *pkts, size_t n){
     for(size_t i=0;i<n;i++){
         accept_header_rtsp_t *h = get_accept_ptr(&pkts[i]);
         if(!h) continue; /* 其他类型没有 Accept，跳过 */
-        size_t idx = (size_t)(rand() % acc_ops_count());
+
+        size_t idx = weighted_pick_idx_accept(weights_accept_ops, acc_ops_count());
         k_acc_ops[idx](h);
+
+        /* 可选稳健性：若实现要求 name 精确为 "Accept"、分隔为 ": "，可再次规范化 */
+        /* set_cstr(h->name,sizeof(h->name),"Accept"); set_colon_space(h->colon_space); set_crlf(h->crlf); */
     }
 }
 
@@ -715,26 +828,48 @@ static ae_fn k_ae_ops[] = {
     ae_unknown_and_wildcard,
 };
 static size_t ae_ops_count(void){ return sizeof(k_ae_ops)/sizeof(k_ae_ops[0]); }
+/* —— Accept-Encoding 变异算子权重：只保留语法合法变体 —— */
+static const int weights_ae_ops[14] = {
+    100, /*  0: ae_set_gzip               — 合法：Accept-Encoding: gzip */
+    100, /*  1: ae_set_identity_only      — 合法：Accept-Encoding: identity */
+    100, /*  2: ae_set_all_wildcard       — 合法：Accept-Encoding: * */
+    100, /*  3: ae_set_with_qparams       — 合法：带 q= 参数的标准列表 */
+      0, /*  4: ae_empty_value            — 空值（非法） */
+      0, /*  5: ae_bad_name_case          — 错拼/大小写（此实现视为非法） */
+      0, /*  6: ae_bad_separator          — 冒号/分隔错误（非法） */
+      0, /*  7: ae_super_long             — 超长（边界/攻击，禁用） */
+      0, /*  8: ae_non_ascii              — 含非 ASCII（非法） */
+      0, /*  9: ae_inject_crlf            — CRLF 注入（非法） */
+      0, /* 10: ae_illegal_token          — 非法 token / 字符（非法） */
+    100, /* 11: ae_duplicates_and_order   — 合法：重复值与不同顺序 */
+      0, /* 12: ae_zero_or_over_q         — 含 q>1 等非法，整体禁用 */
+    100, /* 13: ae_unknown_and_wildcard   — 语法合法：未知编码 + '*' */
+};
 
-/* 批量充分变异：仅对含 Accept-Encoding 的包生效 */
+/* 批量充分变异：仅对含 Accept-Encoding 的包生效，且只选“语法合法”算子 */
 void mutate_accept_encoding(rtsp_packet_t *pkts, size_t n){
-    if(!pkts) return;
-    static int seeded=0; if(!seeded){ srand((unsigned)time(NULL)); seeded=1; }
+    if (!pkts) return;
+    static int seeded = 0;
+    if (!seeded) { srand((unsigned)time(NULL)); seeded = 1; }
 
-    for(size_t i=0;i<n;i++){
+    for (size_t i = 0; i < n; i++) {
         accept_encoding_header_rtsp_t *h = get_ae_ptr(&pkts[i]);
-        if(!h) continue; /* 其他类型无该头，跳过 */
+        if (!h) continue; /* 其他类型无该头，跳过 */
+
         /* 若此前被删除，则先补上基本形态，避免未初始化字段 */
-        if(h->name[0] == '\0'){
-            set_cstr(h->name,sizeof(h->name),"Accept-Encoding");
+        if (h->name[0] == '\0') {
+            set_cstr(h->name, sizeof(h->name), "Accept-Encoding");
             set_colon_space(h->colon_space);
             set_crlf(h->crlf);
-            set_cstr(h->encoding,sizeof(h->encoding),"identity");
+            set_cstr(h->encoding, sizeof(h->encoding), "identity");
         }
-        size_t idx = (size_t)(rand() % ae_ops_count());
+
+        /* 按权重选择一个“语法合法”的 Accept-Encoding 变体 */
+        size_t idx = weighted_pick_idx(weights_ae_ops, ae_ops_count());
         k_ae_ops[idx](h);
     }
 }
+
 
 static inline void clear_entry(accept_language_header_rtsp_t *h){
     if(!h) return;
@@ -956,28 +1091,49 @@ static al_fn k_al_ops[] = {
     al_entry_count_overflow,
 };
 static size_t al_ops_count(void){ return sizeof(k_al_ops)/sizeof(k_al_ops[0]); }
+/* —— Accept-Language 变异算子权重：只保留语法合法变体 —— */
+static const int weights_al_ops[13] = {
+    100, /*  0: al_valid_simple           — 合法：单一语言标签 */
+    100, /*  1: al_valid_multi_ordered    — 合法：多标签、有序、带合法 q= */
+    100, /*  2: al_with_wildcard          — 合法：包含 '*' 通配符 */
+    100, /*  3: al_duplicate_tags         — 合法：重复标签 / 顺序变化 */
+      0, /*  4: al_zero_q_and_over_one    — 含 q>1 等非法，整体禁用 */
+      0, /*  5: al_negative_or_alpha_q    — 非法 q 值（负数/字母） */
+      0, /*  6: al_bad_tag_format         — 非法语言标签格式 */
+      0, /*  7: al_super_long_tag         — 超长标签（边界/攻击，禁用） */
+      0, /*  8: al_non_ascii_tag          — 含非 ASCII 字符（非法） */
+      0, /*  9: al_inject_crlf            — CRLF 注入（非法） */
+      0, /* 10: al_bad_separator          — 冒号/逗号等分隔错误（非法） */
+      0, /* 11: al_delete_header          — 删除头：本轮不删头，禁用 */
+      0, /* 12: al_entry_count_overflow   — 过多 entry（边界/攻击，禁用） */
+};
 
-/* 批量充分变异（仅对含该头的类型生效） */
+/* 批量充分变异（仅对含该头的类型生效，且只选“语法合法”变体） */
 void mutate_accept_language(rtsp_packet_t *pkts, size_t n){
-    if(!pkts) return;
-    static int seeded=0; if(!seeded){ srand((unsigned)time(NULL)); seeded=1; }
+    if (!pkts) return;
+    static int seeded = 0;
+    if (!seeded) { srand((unsigned)time(NULL)); seeded = 1; }
 
-    for(size_t i=0;i<n;i++){
+    for (size_t i = 0; i < n; i++) {
         accept_language_header_rtsp_t *h = get_al_ptr(&pkts[i]);
-        if(!h) continue;
+        if (!h) continue;
+
         /* 若曾被删除，先补最小形态，避免未初始化字段被打印时崩溃 */
-        if(h->name[0] == '\0'){
-            set_cstr(h->name,sizeof(h->name),"Accept-Language");
+        if (h->name[0] == '\0') {
+            set_cstr(h->name, sizeof(h->name), "Accept-Language");
             set_colon_space(h->colon_space);
             set_crlf(h->crlf);
             clear_entry(h);
-            al_set_entry(h,0,"en","1.0");
+            al_set_entry(h, 0, "en", "1.0");
             h->entry_count = 1;
         }
-        size_t idx = (size_t)(rand() % al_ops_count());
+
+        /* 只从语法合法算子中按权重选择一个 */
+        size_t idx = weighted_pick_idx(weights_al_ops, al_ops_count());
         k_al_ops[idx](h);
     }
 }
+
 
 
 /* 取各类型的 Authorization 指针（多数请求类型都有） */
@@ -1214,27 +1370,48 @@ static auth_op_fn k_auth_ops[] = {
     auth_delete_whole_header,
 };
 static size_t auth_ops_count(void){ return sizeof(k_auth_ops)/sizeof(k_auth_ops[0]); }
+/* —— Authorization 变异算子权重：只保留语法合法变体 —— */
+static const int weights_auth_ops[16] = {
+    100, /*  0: auth_basic_valid              — 合法：Basic 正常凭据 */
+      0, /*  1: auth_basic_empty              — 空凭据（非法/实现通常拒绝） */
+      0, /*  2: auth_basic_invalid_b64        — 非法 Base64（非法） */
+      0, /*  3: auth_basic_super_long         — 超长（边界/攻击，本轮禁用） */
+      0, /*  4: auth_name_badcase             — 头名大小写错误（此实现视为非法） */
+      0, /*  5: auth_bad_separator            — 冒号/空格分隔错误（非法） */
+    100, /*  6: auth_digest_valid             — 合法：Digest 正常参数 */
+      0, /*  7: auth_digest_missing_params    — 缺少必需参数（非法） */
+      0, /*  8: auth_digest_bad_qop_nc        — qop/nc 等不符合语法（非法） */
+      0, /*  9: auth_digest_unquoted          — 缺少必需引号（非法） */
+    100, /* 10: auth_digest_dup_params        — 合法：参数重复/顺序变化 */
+      0, /* 11: auth_digest_weird_chars       — 非法字符（非法） */
+    100, /* 12: auth_unknown_scheme           — 语法合法：未知 scheme token */
+      0, /* 13: auth_multiple_schemes_in_one  — 一个头多 scheme（违反 ABNF，禁用） */
+      0, /* 14: auth_no_space_between_scheme_and_cred — 缺少空格（非法） */
+      0, /* 15: auth_delete_whole_header      — 删除整个头，本轮不采用 */
+};
 
-/* 随机充分变异（仅对含该字段的类型生效） */
+/* 随机充分变异（仅对含该字段的类型生效；只选语法合法算子） */
 void mutate_authorization(rtsp_packet_t *pkts, size_t n){
-    if(!pkts) return;
-    static int seeded=0; if(!seeded){ srand((unsigned)time(NULL)); seeded=1; }
+    if (!pkts) return;
+    static int seeded = 0;
+    if (!seeded) { srand((unsigned)time(NULL)); seeded = 1; }
 
-    for(size_t i=0;i<n;i++){
+    for (size_t i = 0; i < n; i++) {
         authorization_header_rtsp_t *h = get_auth_ptr(&pkts[i]);
-        if(!h) continue;
+        if (!h) continue;
 
         /* 若被删过，先补一个最小可打印的骨架 */
-        if(h->name[0] == '\0'){
-            set_cstr(h->name,sizeof(h->name),"Authorization");
+        if (h->name[0] == '\0') {
+            set_cstr(h->name, sizeof(h->name), "Authorization");
             set_colon_space(h->colon_space);
-            set_cstr(h->auth_type,sizeof(h->auth_type),"Basic");
+            set_cstr(h->auth_type, sizeof(h->auth_type), "Basic");
             h->space = ' ';
-            set_cstr(h->credentials,sizeof(h->credentials),"Zjp6"); /* f:z */
+            set_cstr(h->credentials, sizeof(h->credentials), "Zjp6"); /* "f:z" */
             set_crlf(h->crlf);
         }
 
-        size_t idx = (size_t)(rand() % auth_ops_count());
+        /* 只从“语法合法”的 Authorization 变体中按权重选择 */
+        size_t idx = weighted_pick_idx(weights_auth_ops, auth_ops_count());
         k_auth_ops[idx](h);
     }
 }
@@ -1403,27 +1580,47 @@ static bw_op_fn k_bw_ops[] = {
     bw_delete_header,
 };
 static size_t bw_ops_count(void){ return sizeof(k_bw_ops)/sizeof(k_bw_ops[0]); }
+/* —— Bandwidth 变异算子权重：只保留语法合法且值正常的变体 —— */
+static const int weights_bw_ops[13] = {
+    100, /*  0: bw_valid_typical     — 合法：典型 Bandwidth 值 */
+    100, /*  1: bw_zero              — 合法：0，整数语法 OK，一般解析器可接受 */
+      0, /*  2: bw_negative          — 非法：负数，不符合 DIGIT 语法 */
+      0, /*  3: bw_int_max           — 超大值（溢出/攻击边界，本轮禁用） */
+      0, /*  4: bw_int_min           — 非法：负极值 */
+      0, /*  5: bw_random_large      — 超大随机值（攻击/边界，本轮禁用） */
+    100, /*  6: bw_small_random      — 合法：小范围正整数 */
+    100, /*  7: bw_scale_up          — 合法：基于当前值放大，保持正整数 */
+    100, /*  8: bw_scale_down        — 合法：基于当前值缩小，保持非负 */
+      0, /*  9: bw_bad_name_case     — 头名大小写错误（视为非法） */
+      0, /* 10: bw_bad_separator     — 冒号/空格分隔错误（非法） */
+      0, /* 11: bw_missing_crlf      — 少 CRLF，破坏语法（非法） */
+      0, /* 12: bw_delete_header     — 删除整个头，本轮不做删除 */
+};
 
-/* 统一充分变异入口：对所有含 Bandwidth 的包生效 */
+/* 统一充分变异入口：对所有含 Bandwidth 的包生效（仅选“语法合法”算子） */
 void mutate_bandwidth(rtsp_packet_t *arr, size_t n){
-    if(!arr) return;
-    static int seeded=0; if(!seeded){ srand((unsigned)time(NULL)); seeded=1; }
-    for(size_t i=0;i<n;i++){
+    if (!arr) return;
+    static int seeded = 0;
+    if (!seeded) { srand((unsigned)time(NULL)); seeded = 1; }
+
+    for (size_t i = 0; i < n; i++) {
         bandwidth_header_rtsp_t *h = get_bw_ptr(&arr[i]);
-        if(!h) continue;
+        if (!h) continue;
 
         /* 如果当前不存在该头，先补一个最小合规骨架，以便后续算子改写 */
-        if(h->name[0]=='\0'){
-            set_cstr(h->name,sizeof(h->name),"Bandwidth");
+        if (h->name[0] == '\0') {
+            set_cstr(h->name, sizeof(h->name), "Bandwidth");
             set_colon_space(h->colon_space);
             h->value = 1000;
             set_crlf(h->crlf);
         }
 
-        size_t idx = (size_t)(rand() % bw_ops_count());
+        /* 只从“语法合法 + 值正常”的算子中按权重选择 */
+        size_t idx = weighted_pick_idx(weights_bw_ops, bw_ops_count());
         k_bw_ops[idx](h);
     }
 }
+
 
 
 /* ---- 取各类型的 Blocksize 指针（没有该字段的类型返回 NULL） ---- */
@@ -1625,27 +1822,52 @@ static bs_op_fn k_bs_ops[] = {
     bs_delete_header,
 };
 static size_t bs_ops_count(void){ return sizeof(k_bs_ops)/sizeof(k_bs_ops[0]); }
+/* —— Blocksize 变异算子权重：只保留语法合法且“正常”的数值变体 —— */
+static const int weights_bs_ops[18] = {
+    100, /*  0: bs_valid_typical     — 合法：典型 Blocksize 值 */
+    100, /*  1: bs_zero              — 合法：0，纯数字语法 OK（如不需要可改成 0） */
+    100, /*  2: bs_one               — 合法：1，极小但正常 */
+      0, /*  3: bs_negative          — 非法：负数，不符合 DIGIT 语法 */
+      0, /*  4: bs_int_max           — 超大值（溢出/攻击边界，本轮禁用） */
+      0, /*  5: bs_int_min           — 非法：负极值 */
+    100, /*  6: bs_power_of_two      — 合法：2 的幂（512/1024 等） */
+    100, /*  7: bs_odd_unaligned     — 合法：奇数、不对齐值 */
+    100, /*  8: bs_mtu_edge          — 合法：接近 MTU 的边界值 */
+    100, /*  9: bs_ts_like           — 合法：类似 TS 的典型大小 */
+      0, /* 10: bs_random_large      — 超大随机值（攻击/极端边界，本轮禁用） */
+    100, /* 11: bs_small_random      — 合法：小范围随机正整数 */
+    100, /* 12: bs_scale_up          — 合法：按比例放大当前值 */
+    100, /* 13: bs_scale_down        — 合法：按比例缩小当前值 */
+      0, /* 14: bs_bad_name_case     — 头名大小写错误（视为非法） */
+      0, /* 15: bs_bad_separator     — 冒号/空格分隔错误（非法） */
+      0, /* 16: bs_missing_crlf      — 少 CRLF，破坏语法（非法） */
+      0, /* 17: bs_delete_header     — 删除整个头，本轮不采用 */
+};
 
-/* 统一充分变异入口：对所有含 Blocksize 的包生效 */
+/* 统一充分变异入口：对所有含 Blocksize 的包生效（仅选“语法合法”算子） */
 void mutate_blocksize(rtsp_packet_t *arr, size_t n){
-    if(!arr) return;
-    static int seeded=0; if(!seeded){ srand((unsigned)time(NULL)); seeded=1; }
-    for(size_t i=0;i<n;i++){
+    if (!arr) return;
+    static int seeded = 0;
+    if (!seeded) { srand((unsigned)time(NULL)); seeded = 1; }
+
+    for (size_t i = 0; i < n; i++) {
         blocksize_header_rtsp_t *h = get_bs_ptr(&arr[i]);
-        if(!h) continue;
+        if (!h) continue;
 
         /* 若不存在该头，先补最小骨架，便于算子改写 */
-        if(h->name[0]=='\0'){
-            set_cstr(h->name,sizeof(h->name),"Blocksize");
+        if (h->name[0] == '\0') {
+            set_cstr(h->name, sizeof(h->name), "Blocksize");
             set_colon_space(h->colon_space);
             h->value = 1024;
             set_crlf(h->crlf);
         }
 
-        size_t idx = (size_t)(rand() % bs_ops_count());
+        /* 只从“语法合法 + 数值相对正常”的算子中按权重选择 */
+        size_t idx = weighted_pick_idx(weights_bs_ops, bs_ops_count());
         k_bs_ops[idx](h);
     }
 }
+
 
 
 /* ===========================================================
@@ -1767,18 +1989,50 @@ static cc_op_fn k_cc_ops[] = {
     cc_negative_age, cc_multi_list, cc_unknown_token, cc_bad_name_case,
     cc_bad_separator, cc_missing_crlf, cc_delete
 };
+/* —— Cache-Control 变异算子权重：只保留语法合法变体 —— */
+static const int weights_cc_ops[12] = {
+    100, /*  0: cc_valid_no_cache    — 合法：no-cache */
+    100, /*  1: cc_public            — 合法：public */
+    100, /*  2: cc_private           — 合法：private */
+    100, /*  3: cc_max_age_zero      — 合法：max-age=0 */
+    100, /*  4: cc_max_age_large     — 合法：max-age 为大整数（语法合法） */
+      0, /*  5: cc_negative_age      — 非法：max-age 为负数 */
+    100, /*  6: cc_multi_list        — 合法：多指令列表 */
+    100, /*  7: cc_unknown_token     — 合法：未知但语法正确的 token */
+      0, /*  8: cc_bad_name_case     — 头名大小写错误（视为非法） */
+      0, /*  9: cc_bad_separator     — 分隔符错误（非法） */
+      0, /* 10: cc_missing_crlf      — 缺 CRLF，破坏语法（非法） */
+      0, /* 11: cc_delete            — 删除整个头，本轮不做 */
+};
+
+/* 可选：和其他 header 一样补一个 count 函数，避免手写 sizeof */
+static size_t cc_ops_count(void) {
+    return sizeof(k_cc_ops) / sizeof(k_cc_ops[0]);
+}
 
 void mutate_cache_control(rtsp_packet_t *arr, size_t n){
-    if(!arr) return; 
-    static int seeded=0; if(!seeded){ srand((unsigned)time(NULL)); seeded=1; }
-    size_t M = sizeof(k_cc_ops)/sizeof(k_cc_ops[0]);
-    for(size_t i=0;i<n;i++){
+    if (!arr) return;
+    static int seeded = 0;
+    if (!seeded) { srand((unsigned)time(NULL)); seeded = 1; }
+
+    size_t M = cc_ops_count();  /* 或者直接 sizeof 也行 */
+
+    for (size_t i = 0; i < n; i++) {
         cache_control_header_rtsp_t *h = get_cache_control(&arr[i]);
-        if(!h) continue;
-        if(h->name[0]=='\0') add_cache_control(arr+i,1);
-        k_cc_ops[rand()%M](h);
+        if (!h) continue;
+
+        if (h->name[0] == '\0') {
+            /* 没头的时候用现成的构造函数补一个合法骨架 */
+            add_cache_control(arr + i, 1);
+            /* add_cache_control 应该会填好 name/colon_space/value/crlf 等 */
+        }
+
+        /* 只从“语法合法”的 Cache-Control 变体里按权重选择 */
+        size_t idx = weighted_pick_idx(weights_cc_ops, M);
+        k_cc_ops[idx](h);
     }
 }
+
 
 /* ===========================================================
    B) Conference  (只在 SETUP 里出现)
@@ -1897,18 +2151,49 @@ static cf_op_fn k_cf_ops[] = {
     cf_bad_chars, cf_pathy, cf_list, cf_bad_case_name, cf_bad_sep,
     cf_missing_crlf, cf_delete
 };
+/* —— Conference 变异算子权重：只保留语法合法变体 —— */
+static const int weights_cf_ops[12] = {
+    100, /*  0: cf_valid_simple    — 合法：简单 Conference ID */
+    100, /*  1: cf_uuid            — 合法：UUID 形式 ID */
+    100, /*  2: cf_long            — 合法：偏长但仍在可接受范围 */
+      0, /*  3: cf_empty           — 空值（非法） */
+      0, /*  4: cf_unicode         — 非 ASCII / unicode（本轮禁用） */
+      0, /*  5: cf_bad_chars       — 含非法字符（非法） */
+    100, /*  6: cf_pathy           — 合法：path/URI-like ID */
+    100, /*  7: cf_list            — 合法：逗号分隔列表 */
+      0, /*  8: cf_bad_case_name   — 头名大小写错误（非法） */
+      0, /*  9: cf_bad_sep         — 分隔符错误（非法） */
+      0, /* 10: cf_missing_crlf    — 缺 CRLF，破坏语法（非法） */
+      0, /* 11: cf_delete          — 删除整个头，本轮不采用 */
+};
+
+static size_t cf_ops_count(void) {
+    return sizeof(k_cf_ops) / sizeof(k_cf_ops[0]);
+}
 
 void mutate_conference(rtsp_packet_t *arr, size_t n){
-    if(!arr) return;
-    static int seeded=0; if(!seeded){ srand((unsigned)time(NULL)); seeded=1; }
-    size_t M = sizeof(k_cf_ops)/sizeof(k_cf_ops[0]);
-    for(size_t i=0;i<n;i++){
+    if (!arr) return;
+    static int seeded = 0;
+    if (!seeded) { srand((unsigned)time(NULL)); seeded = 1; }
+
+    size_t M = cf_ops_count();
+
+    for (size_t i = 0; i < n; i++) {
         conference_header_rtsp_t *h = get_conference(&arr[i]);
-        if(!h) continue;
-        if(h->name[0]=='\0') add_conference(arr+i,1);
-        k_cf_ops[rand()%M](h);
+        if (!h) continue;
+
+        if (h->name[0] == '\0') {
+            /* 使用已有构造函数补一个最小合法骨架 */
+            add_conference(arr + i, 1);
+            /* 假设 add_conference 会把 name/colon_space/value/crlf 都填好 */
+        }
+
+        /* 只从“语法合法”的 Conference 变体中按权重选择 */
+        size_t idx = weighted_pick_idx(weights_cf_ops, M);
+        k_cf_ops[idx](h);
     }
 }
+
 
 /* ===========================================================
    C) Connection  (所有请求都有，可选)
@@ -2032,18 +2317,46 @@ static cn_op_fn k_cn_ops[] = {
     cn_keep_alive, cn_close, cn_token_list, cn_unknown, cn_bad_case_name,
     cn_bad_sep, cn_ws_fold, cn_empty, cn_inject_chars, cn_long, cn_delete
 };
+/* —— Connection 变异算子权重：只保留语法合法变体 —— */
+static const int weights_cn_ops[11] = {
+    100, /* 0: cn_keep_alive      — 合法：keep-alive */
+    100, /* 1: cn_close           — 合法：close */
+    100, /* 2: cn_token_list      — 合法：逗号分隔 token 列表 */
+    100, /* 3: cn_unknown         — 合法：未知但语法正确的 token */
+      0, /* 4: cn_bad_case_name   — 头名大小写错误（非法） */
+      0, /* 5: cn_bad_sep         — 冒号/逗号/空格分隔错误（非法） */
+    100, /* 6: cn_ws_fold         — 合法：obs-fold / WS 折行 */
+      0, /* 7: cn_empty           — 空值（非法） */
+      0, /* 8: cn_inject_chars    — 注入非法字符/攻击 payload（非法） */
+    100, /* 9: cn_long            — 合法：偏长但可接受的值 */
+      0, /*10: cn_delete          — 删除整个头，本轮不采用 */
+};
+
+static size_t cn_ops_count(void) {
+    return sizeof(k_cn_ops) / sizeof(k_cn_ops[0]);
+}
 
 void mutate_connection(rtsp_packet_t *arr, size_t n){
-    if(!arr) return;
-    static int seeded=0; if(!seeded){ srand((unsigned)time(NULL)); seeded=1; }
-    size_t M = sizeof(k_cn_ops)/sizeof(k_cn_ops[0]);
-    for(size_t i=0;i<n;i++){
+    if (!arr) return;
+    static int seeded = 0;
+    if (!seeded) { srand((unsigned)time(NULL)); seeded = 1; }
+
+    size_t M = cn_ops_count();
+
+    for (size_t i = 0; i < n; i++) {
         connection_header_rtsp_t *h = get_connection(&arr[i]);
-        if(!h) continue;
-        if(h->name[0]=='\0') add_connection(arr+i,1);
-        k_cn_ops[rand()%M](h);
+        if (!h) continue;
+
+        if (h->name[0] == '\0') {
+            add_connection(arr + i, 1);  /* 补一个最小合法骨架 */
+        }
+
+        /* 只从“语法合法”的变体中按权重选择 */
+        size_t idx = weighted_pick_idx(weights_cn_ops, M);
+        k_cn_ops[idx](h);
     }
 }
+
 
 
 
@@ -2165,16 +2478,47 @@ static cb_op_fn k_cb_ops[] = {
     cb_unicode, cb_path_traversal, cb_empty, cb_bad_sep, cb_inject_crlf,
     cb_missing_crlf, cb_delete
 };
+/* —— Content-Base 变异算子权重：只保留语法合法的变体 —— */
+static const int weights_cb_ops[12] = {
+    100, /*  0: cb_valid_abs          — 合法：绝对 URI */
+    100, /*  1: cb_http_scheme        — 合法：HTTP URI */
+    100, /*  2: cb_no_trailing_slash  — 合法：无尾斜杠的 URI */
+    100, /*  3: cb_ipv6               — 合法：IPv6 主机形式 URI */
+    100, /*  4: cb_userinfo           — 合法：userinfo@host 形式
+                                          （如不想要可改为 0） */
+      0, /*  5: cb_unicode            — 含 unicode / 非 ASCII（本轮禁用） */
+      0, /*  6: cb_path_traversal     — 路径遍历（攻击/边界，本轮禁用） */
+      0, /*  7: cb_empty              — 空值（非法） */
+      0, /*  8: cb_bad_sep            — 分隔符错误（非法） */
+      0, /*  9: cb_inject_crlf        — CRLF 注入（非法） */
+      0, /* 10: cb_missing_crlf       — 缺 CRLF，破坏报文语法（非法） */
+      0, /* 11: cb_delete             — 删除整个头，本轮不采用 */
+};
+
+static size_t cb_ops_count(void) {
+    return sizeof(k_cb_ops) / sizeof(k_cb_ops[0]);
+}
+
 void mutate_content_base(rtsp_packet_t *arr, size_t n){
-    if(!arr) return; rng_seed();
-    size_t M = sizeof(k_cb_ops)/sizeof(k_cb_ops[0]);
-    for(size_t i=0;i<n;i++){
+    if (!arr) return;
+    rng_seed();  /* 你已有的封装，内部应该会 srand 一次 */
+
+    size_t M = cb_ops_count();
+
+    for (size_t i = 0; i < n; i++) {
         content_base_header_rtsp_t *h = get_content_base(&arr[i]);
-        if(!h) continue;
-        if(h->name[0]=='\0') add_content_base(arr+i,1);
-        k_cb_ops[rand()%M](h);
+        if (!h) continue;
+
+        if (h->name[0] == '\0') {
+            add_content_base(arr + i, 1);  /* 补一个最小合法骨架 */
+        }
+
+        /* 只从“语法合法”的 Content-Base 变体中按权重选择 */
+        size_t idx = weighted_pick_idx(weights_cb_ops, M);
+        k_cb_ops[idx](h);
     }
 }
+
 
 /* ===========================================================
    2) Content-Encoding (DESCRIBE / SET_PARAMETER / ANNOUNCE, optional)
@@ -2273,16 +2617,46 @@ static ce_op_fn k_ce_ops[] = {
     ce_bad_case_name, ce_bad_sep, ce_ws_fold, ce_empty, ce_inject_crlf,
     ce_missing_crlf, ce_delete
 };
+/* —— Content-Encoding 变异算子权重：只保留语法合法变体 —— */
+static const int weights_ce_ops[12] = {
+    100, /*  0: ce_gzip           — 合法：gzip */
+    100, /*  1: ce_deflate        — 合法：deflate */
+    100, /*  2: ce_identity        — 合法：identity */
+    100, /*  3: ce_unknown_token   — 合法：未知但语法正确的 encoding token */
+    100, /*  4: ce_multi           — 合法：逗号分隔多编码列表 */
+      0, /*  5: ce_bad_case_name   — 头名大小写错误（非法） */
+      0, /*  6: ce_bad_sep         — 分隔符错误（非法） */
+    100, /*  7: ce_ws_fold         — 合法：带 WS/折行的写法 */
+      0, /*  8: ce_empty           — 空值（非法） */
+      0, /*  9: ce_inject_crlf     — CRLF 注入（非法） */
+      0, /* 10: ce_missing_crlf    — 缺 CRLF，破坏报文语法（非法） */
+      0, /* 11: ce_delete          — 删除整个头，本轮不采用 */
+};
+
+static size_t ce_ops_count(void) {
+    return sizeof(k_ce_ops) / sizeof(k_ce_ops[0]);
+}
 void mutate_content_encoding(rtsp_packet_t *arr, size_t n){
-    if(!arr) return; rng_seed();
-    size_t M = sizeof(k_ce_ops)/sizeof(k_ce_ops[0]);
-    for(size_t i=0;i<n;i++){
+    if (!arr) return;
+    rng_seed();  /* 你自己的封装，内部应该只会 srand 一次 */
+
+    size_t M = ce_ops_count();
+
+    for (size_t i = 0; i < n; i++) {
         content_encoding_header_rtsp_t *h = get_content_enc(&arr[i]);
-        if(!h) continue;
-        if(h->name[0]=='\0') add_content_encoding(arr+i,1);
-        k_ce_ops[rand()%M](h);
+        if (!h) continue;
+
+        if (h->name[0] == '\0') {
+            /* 构造一个最小合法骨架，方便后续算子改写 */
+            add_content_encoding(arr + i, 1);
+        }
+
+        /* 只从“语法合法”的 Content-Encoding 变体中按权重选择 */
+        size_t idx = weighted_pick_idx(weights_ce_ops, M);
+        k_ce_ops[idx](h);
     }
 }
+
 
 /* ===========================================================
    3) Content-Language (DESCRIBE / ANNOUNCE, optional)
@@ -2384,16 +2758,48 @@ static cl_op_fn k_cl_ops[] = {
     cl_unicode_tag, cl_empty, cl_bad_sep, cl_case_name, cl_spaces_ws,
     cl_inject_crlf, cl_missing_crlf, cl_delete
 };
+/* —— Content-Language 变异算子权重：只保留语法合法变体 —— */
+static const int weights_cl_ops[13] = {
+    100, /*  0: cl_en_us          — 合法：en-US */
+    100, /*  1: cl_simple_tag     — 合法：简单语言标签，如 "en" */
+    100, /*  2: cl_multi_list_q   — 合法：带 q 的多标签列表（按规范构造） */
+      0, /*  3: cl_bad_q          — 非法 q 值（负数/大于1/非数字等） */
+      0, /*  4: cl_wildcard_like  — wildcard-like（Content-Language 中视为非法） */
+      0, /*  5: cl_unicode_tag    — 含 unicode / 非 ASCII（本轮禁用） */
+      0, /*  6: cl_empty          — 空值（非法） */
+      0, /*  7: cl_bad_sep        — 分隔符错误（非法） */
+      0, /*  8: cl_case_name      — 头名大小写错误（非法） */
+    100, /*  9: cl_spaces_ws      — 合法：仅空白变化（额外 SP/HT 等） */
+      0, /* 10: cl_inject_crlf    — CRLF 注入（非法） */
+      0, /* 11: cl_missing_crlf   — 缺 CRLF，破坏报文结构（非法） */
+      0, /* 12: cl_delete         — 删除整个头，本轮不采用 */
+};
+
+static size_t cl_ops_count(void) {
+    return sizeof(k_cl_ops) / sizeof(k_cl_ops[0]);
+}
+
 void mutate_content_language(rtsp_packet_t *arr, size_t n){
-    if(!arr) return; rng_seed();
-    size_t M = sizeof(k_cl_ops)/sizeof(k_cl_ops[0]);
-    for(size_t i=0;i<n;i++){
+    if (!arr) return;
+    rng_seed();
+
+    size_t M = cl_ops_count();
+
+    for (size_t i = 0; i < n; i++) {
         content_language_header_rtsp_t *h = get_content_lang(&arr[i]);
-        if(!h) continue;
-        if(h->name[0]=='\0') add_content_language(arr+i,1);
-        k_cl_ops[rand()%M](h);
+        if (!h) continue;
+
+        if (h->name[0] == '\0') {
+            /* 用已有 helper 构造一个最小合法骨架 */
+            add_content_language(arr + i, 1);
+        }
+
+        /* 只从“语法合法”的 Content-Language 变体中按权重选择 */
+        size_t idx = weighted_pick_idx(weights_cl_ops, M);
+        k_cl_ops[idx](h);
     }
 }
+
 
 
 /* ===========================================================
@@ -2497,16 +2903,47 @@ static clen_op_fn k_clen_ops[] = {
     clen_huge, clen_off_by_one_low, clen_off_by_one_high, clen_bad_sep,
     clen_missing_crlf, clen_bad_case, clen_delete
 };
+/* —— Content-Length 变异算子权重：只保留语法合法、数值正常的变体 —— */
+static const int weights_clen_ops[12] = {
+    100, /*  0: clen_ok_small         — 合法：小的正常长度 */
+    100, /*  1: clen_ok_typical       — 合法：典型长度 */
+      0, /*  2: clen_maxint           — 极端大值（攻击/溢出边界，本轮禁用） */
+      0, /*  3: clen_minint           — 负极值，含 '-'，不符合 1*DIGIT 语法 */
+      0, /*  4: clen_minus_one        — -1，同上，语法非法 */
+      0, /*  5: clen_huge             — 超大随机值（攻击/极端边界，本轮禁用） */
+    100, /*  6: clen_off_by_one_low   — 合法：数值略小 1，但字段语法正确 */
+    100, /*  7: clen_off_by_one_high  — 合法：数值略大 1，但字段语法正确 */
+      0, /*  8: clen_bad_sep          — 冒号/空格等分隔错误（非法） */
+      0, /*  9: clen_missing_crlf     — 缺 CRLF，破坏报文结构（非法） */
+      0, /* 10: clen_bad_case         — 头名大小写错误（非法） */
+      0, /* 11: clen_delete           — 删除整个头，本轮不采用 */
+};
+
+static size_t clen_ops_count(void) {
+    return sizeof(k_clen_ops) / sizeof(k_clen_ops[0]);
+}
+
 void mutate_content_length(rtsp_packet_t *arr, size_t n){
-    if(!arr) return; rng_seed();
-    size_t M = sizeof(k_clen_ops)/sizeof(k_clen_ops[0]);
-    for(size_t i=0;i<n;i++){
+    if (!arr) return;
+    rng_seed();
+
+    size_t M = clen_ops_count();
+
+    for (size_t i = 0; i < n; i++) {
         content_length_header_rtsp_t *h = get_content_length(&arr[i]);
-        if(!h) continue;
-        if(h->name[0]=='\0') add_content_length(arr+i,1,0);
-        k_clen_ops[rand()%M](h);
+        if (!h) continue;
+
+        if (h->name[0] == '\0') {
+            /* 构造一个最小合法骨架，便于后续算子改写 */
+            add_content_length(arr + i, 1, 0);
+        }
+
+        /* 只从“语法合法 + 数值合理”的变体中按权重选择 */
+        size_t idx = weighted_pick_idx(weights_clen_ops, M);
+        k_clen_ops[idx](h);
     }
 }
+
 
 /* ===========================================================
    Content-Location  (DESCRIBE/GET_PARAMETER)
@@ -2608,16 +3045,48 @@ static cloc_op_fn k_cloc_ops[] = {
     cloc_space_in_uri, cloc_unicode, cloc_traversal, cloc_empty, cloc_bad_sep,
     cloc_inject_crlf, cloc_missing_crlf, cloc_delete
 };
+/* —— Content-Location 变异算子权重：只保留语法合法变体 —— */
+static const int weights_cloc_ops[13] = {
+    100, /*  0: cloc_abs_rtsp       — 合法：绝对 RTSP URI */
+    100, /*  1: cloc_relative       — 合法：相对 URI */
+    100, /*  2: cloc_http_scheme    — 合法：HTTP/HTTPS URI */
+    100, /*  3: cloc_ipv6           — 合法：IPv6 主机形式 URI */
+    100, /*  4: cloc_userinfo       — 合法：userinfo@host 形式 URI */
+      0, /*  5: cloc_space_in_uri   — URI 内含裸空格（语法非法） */
+      0, /*  6: cloc_unicode        — unicode / 非 ASCII（本轮禁用） */
+      0, /*  7: cloc_traversal      — 路径遍历（攻击/边界，本轮禁用） */
+      0, /*  8: cloc_empty          — 空值（非法） */
+      0, /*  9: cloc_bad_sep        — 分隔符错误（非法） */
+      0, /* 10: cloc_inject_crlf    — CRLF 注入（非法） */
+      0, /* 11: cloc_missing_crlf   — 缺 CRLF，破坏报文结构（非法） */
+      0, /* 12: cloc_delete         — 删除整个头，本轮不采用 */
+};
+
+static size_t cloc_ops_count(void) {
+    return sizeof(k_cloc_ops) / sizeof(k_cloc_ops[0]);
+}
+
 void mutate_content_location(rtsp_packet_t *arr, size_t n){
-    if(!arr) return; rng_seed();
-    size_t M = sizeof(k_cloc_ops)/sizeof(k_cloc_ops[0]);
-    for(size_t i=0;i<n;i++){
+    if (!arr) return;
+    rng_seed();
+
+    size_t M = cloc_ops_count();
+
+    for (size_t i = 0; i < n; i++) {
         content_location_header_rtsp_t *h = get_content_location(&arr[i]);
-        if(!h) continue;
-        if(h->name[0]=='\0') add_content_location(arr+i,1,NULL);
-        k_cloc_ops[rand()%M](h);
+        if (!h) continue;
+
+        if (h->name[0] == '\0') {
+            /* 构造一个最小合法骨架，便于后续算子改写 */
+            add_content_location(arr + i, 1, NULL);
+        }
+
+        /* 只从“语法合法”的 Content-Location 变体中按权重选择 */
+        size_t idx = weighted_pick_idx(weights_cloc_ops, M);
+        k_cloc_ops[idx](h);
     }
 }
+
 
 /* ===========================================================
    Content-Type  (SET_PARAMETER/ANNOUNCE)
@@ -2745,16 +3214,49 @@ static ctype_op_fn k_ctype_ops[] = {
     ct_long_tokens, ct_param_semicolon_chain, ct_inject_crlf,
     ct_missing_crlf, ct_delete
 };
+/* —— Content-Type 变异算子权重：只保留语法合法的变体 —— */
+static const int weights_ctype_ops[14] = {
+    100, /*  0: ct_sdp                   — 合法：application/sdp */
+    100, /*  1: ct_text_plain            — 合法：text/plain */
+    100, /*  2: ct_json                  — 合法：application/json */
+      0, /*  3: ct_wildcard_all          — Content-Type 中的 */
+    100, /*  4: ct_param_charset         — 合法：带 charset 等参数 */
+    100, /*  5: ct_upper_lower           — 合法：仅大小写变化（token 语法 OK） */
+      0, /*  6: ct_missing_slash         — 缺少 "/"，不符合 type/subtype 语法 */
+      0, /*  7: ct_empty_subtype         — 空 subtype（非法） */
+      0, /*  8: ct_bad_sep               — 分隔符错误（非法） */
+    100, /*  9: ct_long_tokens           — 合法：较长但仍是合法 token */
+    100, /* 10: ct_param_semicolon_chain — 合法：多参数 ;param=... 链 */
+      0, /* 11: ct_inject_crlf           — CRLF 注入（非法） */
+      0, /* 12: ct_missing_crlf          — 缺 CRLF，破坏报文结构（非法） */
+      0, /* 13: ct_delete                — 删除整个头，本轮不采用 */
+};
+
+static size_t ctype_ops_count(void) {
+    return sizeof(k_ctype_ops) / sizeof(k_ctype_ops[0]);
+}
+
 void mutate_content_type(rtsp_packet_t *arr, size_t n){
-    if(!arr) return; rng_seed();
-    size_t M = sizeof(k_ctype_ops)/sizeof(k_ctype_ops[0]);
-    for(size_t i=0;i<n;i++){
+    if (!arr) return;
+    rng_seed();
+
+    size_t M = ctype_ops_count();
+
+    for (size_t i = 0; i < n; i++) {
         content_type_header_rtsp_t *h = get_content_type(&arr[i]);
-        if(!h) continue;
-        if(h->name[0]=='\0') add_content_type(arr+i,1,"application","sdp");
-        k_ctype_ops[rand()%M](h);
+        if (!h) continue;
+
+        if (h->name[0] == '\0') {
+            /* 构造一个最小合法骨架，便于后续算子改写 */
+            add_content_type(arr + i, 1, "application", "sdp");
+        }
+
+        /* 只从“语法合法”的 Content-Type 变体中按权重选择 */
+        size_t idx = weighted_pick_idx(weights_ctype_ops, M);
+        k_ctype_ops[idx](h);
     }
 }
+
 
 
 /* =========================
@@ -2856,13 +3358,43 @@ static date_op_fn k_date_ops[] = {
     dt_timezone_lc, dt_bad_sep, dt_lowercase_name, dt_missing_crlf,
     dt_future_year, dt_delete
 };
+/* —— Date 变异算子权重：只保留语法合法变体 —— */
+static const int weights_date_ops[11] = {
+    100, /* 0: dt_ok_sample       — 完全合法示例 */
+    100, /* 1: dt_wrong_wkday     — 星期几错误但格式合法 */
+      0, /* 2: dt_bad_month       — 非法月份（语法非法） */
+      0, /* 3: dt_year_2digit     — 2 位年份，不符合 RTSP Date 语法 */
+      0, /* 4: dt_bad_time        — 非法时间（语法非法） */
+    100, /* 5: dt_timezone_lc     — 时区小写，格式合法 */
+      0, /* 6: dt_bad_sep         — 分隔符错误（非法） */
+      0, /* 7: dt_lowercase_name  — 头名大小写错误（非法） */
+      0, /* 8: dt_missing_crlf    — 缺 CRLF，破坏报文结构 */
+    100, /* 9: dt_future_year     — 很远的未来年份，格式合法 */
+      0, /*10: dt_delete          — 删除整个头，本轮禁用 */
+};
+
+static size_t date_ops_count(void) {
+    return sizeof(k_date_ops) / sizeof(k_date_ops[0]);
+}
+
 void mutate_date(rtsp_packet_t *arr, size_t n){
-    if(!arr) return; rng_seed();
-    size_t M = sizeof(k_date_ops)/sizeof(k_date_ops[0]);
-    for(size_t i=0;i<n;i++){
-        date_header_rtsp_t *h = get_date(&arr[i]); if(!h) continue;
-        if(h->name[0]=='\0') add_date(arr+i,1,NULL,NULL,NULL,NULL,NULL);
-        k_date_ops[rand()%M](h);
+    if (!arr) return;
+    rng_seed();
+
+    size_t M = date_ops_count();
+
+    for (size_t i = 0; i < n; i++) {
+        date_header_rtsp_t *h = get_date(&arr[i]);
+        if (!h) continue;
+
+        if (h->name[0] == '\0') {
+            /* 补一个最小合法骨架，避免未初始化字段 */
+            add_date(arr + i, 1, NULL, NULL, NULL, NULL, NULL);
+        }
+
+        /* 只从语法合法的 Date 变体中按权重选择 */
+        size_t idx = weighted_pick_idx(weights_date_ops, M);
+        k_date_ops[idx](h);
     }
 }
 
@@ -2937,13 +3469,43 @@ static exp_op_fn k_exp_ops[] = {
     ex_lowercase_name, ex_bad_sep, ex_missing_crlf, ex_weekday_mismatch,
     ex_year_2digit, ex_delete
 };
+/* —— Expires 变异算子权重：只保留语法合法的变体 —— */
+static const int weights_exp_ops[11] = {
+    100, /* 0: ex_ok_future        — 完全合法的未来时间 */
+    100, /* 1: ex_past             — 过去时间，格式合法 */
+    100, /* 2: ex_now              — 当前时间，格式合法 */
+      0, /* 3: ex_bad_month        — 非法月份（Foo） */
+      0, /* 4: ex_bad_time         — 非法时间 24:61:61 */
+      0, /* 5: ex_lowercase_name   — 头名小写（非法） */
+      0, /* 6: ex_bad_sep          — 分隔符错误（非法） */
+      0, /* 7: ex_missing_crlf     — 缺 CRLF，结构非法 */
+    100, /* 8: ex_weekday_mismatch — 星期几与日期不符但格式合法 */
+      0, /* 9: ex_year_2digit      — 2 位年份（非法） */
+      0, /*10: ex_delete           — 删除头，本轮禁用 */
+};
+
+static size_t exp_ops_count(void) {
+    return sizeof(k_exp_ops) / sizeof(k_exp_ops[0]);
+}
+
 void mutate_expires(rtsp_packet_t *arr, size_t n){
-    if(!arr) return; rng_seed();
-    size_t M = sizeof(k_exp_ops)/sizeof(k_exp_ops[0]);
-    for(size_t i=0;i<n;i++){
-        expires_header_rtsp_t *h = get_expires(&arr[i]); if(!h) continue;
-        if(h->name[0]=='\0') add_expires(arr+i,1,NULL,NULL,NULL,NULL,NULL);
-        k_exp_ops[rand()%M](h);
+    if (!arr) return;
+    rng_seed();
+
+    size_t M = exp_ops_count();
+
+    for (size_t i = 0; i < n; i++) {
+        expires_header_rtsp_t *h = get_expires(&arr[i]);
+        if (!h) continue;
+
+        if (h->name[0] == '\0') {
+            /* 构造一个最小合法骨架，避免未初始化字段 */
+            add_expires(arr + i, 1, NULL, NULL, NULL, NULL, NULL);
+        }
+
+        /* 只从语法合法的 Expires 变体中按权重选择 */
+        size_t idx = weighted_pick_idx(weights_exp_ops, M);
+        k_exp_ops[idx](h);
     }
 }
 
@@ -3036,15 +3598,44 @@ static from_op_fn k_from_ops[] = {
     fr_lowercase_name, fr_missing_crlf, fr_long_uri, fr_inject_comma_list,
     fr_delete
 };
+/* —— From 变异算子权重：只保留语法合法变体 —— */
+static const int weights_from_ops[10] = {
+    100, /* 0: fr_ok_sip             — 合法：<sip:...> */
+    100, /* 1: fr_ok_mailto          — 合法：<mailto:...> */
+    100, /* 2: fr_no_angle           — 合法：无尖括号但 URI 语法正确 */
+      0, /* 3: fr_empty_uri          — 空 URI（非法） */
+      0, /* 4: fr_bad_sep            — 分隔符错误（非法） */
+      0, /* 5: fr_lowercase_name     — 头名小写（非法） */
+      0, /* 6: fr_missing_crlf       — 缺 CRLF，破坏报文结构 */
+    100, /* 7: fr_long_uri           — 合法：较长但语法正确的 URI */
+    100, /* 8: fr_inject_comma_list  — 合法：逗号列表形式的多地址 */
+      0, /* 9: fr_delete             — 删除整个头，本轮禁用 */
+};
+
+static size_t from_ops_count(void) {
+    return sizeof(k_from_ops) / sizeof(k_from_ops[0]);
+}
+
 void mutate_from(rtsp_packet_t *arr, size_t n){
-    if(!arr) return; rng_seed();
-    size_t M = sizeof(k_from_ops)/sizeof(k_from_ops[0]);
-    for(size_t i=0;i<n;i++){
-        from_header_rtsp_t *h = get_from(&arr[i]); if(!h) continue;
-        if(h->name[0]=='\0') add_from(arr+i,1,NULL);
-        k_from_ops[rand()%M](h);
+    if (!arr) return;
+    rng_seed();
+
+    size_t M = from_ops_count();
+
+    for (size_t i = 0; i < n; i++) {
+        from_header_rtsp_t *h = get_from(&arr[i]);
+        if (!h) continue;
+
+        if (h->name[0] == '\0') {
+            add_from(arr + i, 1, NULL);  /* 构造最小合法骨架 */
+        }
+
+        /* 只从语法合法的 From 变体里按权重选择 */
+        size_t idx = weighted_pick_idx(weights_from_ops, M);
+        k_from_ops[idx](h);
     }
 }
+
 
 /* =======================================================
    2) If-Modified-Since（可选；SETUP、DESCRIBE）
@@ -3116,13 +3707,42 @@ static ims_op_fn k_ims_ops[] = {
     ims_no_space_after_colon, ims_missing_crlf, ims_weekday_mismatch,
     ims_year_2digit, ims_delete
 };
+/* —— If-Modified-Since 变异算子权重：只保留语法合法变体 —— */
+static const int weights_ims_ops[10] = {
+    100, /* 0: ims_ok_past             — 合法：过去时间 */
+    100, /* 1: ims_future              — 合法：未来时间 */
+      0, /* 2: ims_bad_month           — 非法月份 */
+      0, /* 3: ims_bad_time            — 非法时间 */
+      0, /* 4: ims_lowercase_name      — 头名小写（非法） */
+      0, /* 5: ims_no_space_after_colon— 冒号后缺空格（非法） */
+      0, /* 6: ims_missing_crlf        — 缺 CRLF，破坏报文结构 */
+    100, /* 7: ims_weekday_mismatch    — 星期几不匹配但格式合法 */
+      0, /* 8: ims_year_2digit         — 两位年份（非法） */
+      0, /* 9: ims_delete              — 删除整个头，本轮禁用 */
+};
+
+static size_t ims_ops_count(void) {
+    return sizeof(k_ims_ops) / sizeof(k_ims_ops[0]);
+}
+
 void mutate_if_modified_since(rtsp_packet_t *arr, size_t n){
-    if(!arr) return; rng_seed();
-    size_t M = sizeof(k_ims_ops)/sizeof(k_ims_ops[0]);
-    for(size_t i=0;i<n;i++){
-        if_modified_since_header_rtsp_t *h=get_ims(&arr[i]); if(!h) continue;
-        if(h->name[0]=='\0') add_if_modified_since(arr+i,1,NULL,NULL,NULL,NULL,NULL);
-        k_ims_ops[rand()%M](h);
+    if (!arr) return;
+    rng_seed();
+
+    size_t M = ims_ops_count();
+
+    for (size_t i = 0; i < n; i++) {
+        if_modified_since_header_rtsp_t *h = get_ims(&arr[i]);
+        if (!h) continue;
+
+        if (h->name[0] == '\0') {
+            /* 构造一个最小合法骨架，避免未初始化字段 */
+            add_if_modified_since(arr + i, 1, NULL, NULL, NULL, NULL, NULL);
+        }
+
+        /* 只从“语法合法”的 If-Modified-Since 变体里按权重选择 */
+        size_t idx = weighted_pick_idx(weights_ims_ops, M);
+        k_ims_ops[idx](h);
     }
 }
 
@@ -3189,15 +3809,46 @@ static lm_op_fn k_lm_ops[] = {
     lm_lowercase_name, lm_bad_sep, lm_missing_crlf, lm_weekday_mismatch,
     lm_year_2digit, lm_delete
 };
+/* —— Last-Modified 变异算子权重：只保留语法合法变体 —— */
+static const int weights_lm_ops[11] = {
+    100, /* 0: lm_ok_sample        — 完全合法示例 */
+    100, /* 1: lm_very_old         — 很久以前，但格式合法 */
+    100, /* 2: lm_future           — 未来时间，格式合法 */
+      0, /* 3: lm_bad_month        — 非法月份 */
+      0, /* 4: lm_bad_time         — 非法时间 */
+      0, /* 5: lm_lowercase_name   — 头名小写（非法） */
+      0, /* 6: lm_bad_sep          — 分隔符错误（非法） */
+      0, /* 7: lm_missing_crlf     — 缺 CRLF，破坏报文结构 */
+    100, /* 8: lm_weekday_mismatch — 星期几不匹配但格式合法 */
+      0, /* 9: lm_year_2digit      — 两位年份（非法） */
+      0, /*10: lm_delete           — 删除整个头，本轮禁用 */
+};
+
+static size_t lm_ops_count(void) {
+    return sizeof(k_lm_ops) / sizeof(k_lm_ops[0]);
+}
+
 void mutate_last_modified(rtsp_packet_t *arr, size_t n){
-    if(!arr) return; rng_seed();
-    size_t M = sizeof(k_lm_ops)/sizeof(k_lm_ops[0]);
-    for(size_t i=0;i<n;i++){
-        last_modified_header_rtsp_t *h=get_last_mod(&arr[i]); if(!h) continue;
-        if(h->name[0]=='\0') add_last_modified(arr+i,1,NULL,NULL,NULL,NULL,NULL);
-        k_lm_ops[rand()%M](h);
+    if (!arr) return;
+    rng_seed();
+
+    size_t M = lm_ops_count();
+
+    for (size_t i = 0; i < n; i++) {
+        last_modified_header_rtsp_t *h = get_last_mod(&arr[i]);
+        if (!h) continue;
+
+        if (h->name[0] == '\0') {
+            /* 构造一个最小合法骨架，避免未初始化字段 */
+            add_last_modified(arr + i, 1, NULL, NULL, NULL, NULL, NULL);
+        }
+
+        /* 只从“语法合法”的 Last-Modified 变体里按权重选择 */
+        size_t idx = weighted_pick_idx(weights_lm_ops, M);
+        k_lm_ops[idx](h);
     }
 }
+
 
 
 
@@ -3282,15 +3933,42 @@ static pr_op_fn k_pr_ops[] = {
     pr_ok_multi, pr_empty_tag, pr_bad_sep, pr_lowercase_name,
     pr_long_tag, pr_weird_chars, pr_space_list, pr_delete
 };
+/* —— Proxy-Require 变异算子权重：只保留语法合法/正常变体 —— */
+static const int weights_pr_ops[8] = {
+    100, /* 0: pr_ok_multi       — 合法：多 requirement-tag 列表 */
+      0, /* 1: pr_empty_tag      — 空 tag（非法） */
+      0, /* 2: pr_bad_sep        — 分隔符错误（非法） */
+      0, /* 3: pr_lowercase_name — 头名小写（非法） */
+    100, /* 4: pr_long_tag       — 合法：偏长但仍是合法 token */
+      0, /* 5: pr_weird_chars    — 含非法/奇怪字符（非法） */
+    100, /* 6: pr_space_list     — 合法：使用空白组织的列表（兼容写法） */
+      0, /* 7: pr_delete         — 删除整个头，本轮禁用 */
+};
+
+static size_t pr_ops_count(void) {
+    return sizeof(k_pr_ops) / sizeof(k_pr_ops[0]);
+}
+
 void mutate_proxy_require(rtsp_packet_t *arr, size_t n){
-    if(!arr) return; rng_seed();
-    size_t M=sizeof(k_pr_ops)/sizeof(k_pr_ops[0]);
-    for(size_t i=0;i<n;i++){
-        proxy_require_header_rtsp_t *h=get_proxy_require(&arr[i]); if(!h) continue;
-        if(h->name[0]=='\0') add_proxy_require(arr+i,1,NULL);
-        k_pr_ops[rand()%M](h);
+    if (!arr) return;
+    rng_seed();
+
+    size_t M = pr_ops_count();
+
+    for (size_t i = 0; i < n; i++) {
+        proxy_require_header_rtsp_t *h = get_proxy_require(&arr[i]);
+        if (!h) continue;
+
+        if (h->name[0] == '\0') {
+            add_proxy_require(arr + i, 1, NULL);  /* 构造最小合法骨架 */
+        }
+
+        /* 只从“语法合法/正常”的 Proxy-Require 变体中按权重选择 */
+        size_t idx = weighted_pick_idx(weights_pr_ops, M);
+        k_pr_ops[idx](h);
     }
 }
+
 
 /* =======================================================
    2) Range（仅在 PLAY/PAUSE/RECORD）
@@ -3348,15 +4026,44 @@ static rg_op_fn k_rg_ops[] = {
     rg_non_numeric, rg_missing_eq, rg_missing_dash, rg_negative, rg_big_numbers,
     rg_delete
 };
+/* —— Range 变异算子权重：只保留语法合法的变体 —— */
+static const int weights_rg_ops[11] = {
+    100, /* 0: rg_ok_closed       — 合法：闭区间 start-end */
+    100, /* 1: rg_ok_open_end     — 合法：start- */
+    100, /* 2: rg_ok_open_start   — 合法：-end */
+    100, /* 3: rg_reverse         — 语义反转，但格式合法 */
+      0, /* 4: rg_bad_unit        — 错 unit（非法/边界） */
+      0, /* 5: rg_non_numeric     — 非数字（非法） */
+      0, /* 6: rg_missing_eq      — 缺 "="（非法） */
+      0, /* 7: rg_missing_dash    — 缺 "-"（非法） */
+      0, /* 8: rg_negative        — 负数，不符合 1*DIGIT 语法 */
+      0, /* 9: rg_big_numbers     — 极大数字（攻击/边界，本轮禁用） */
+      0, /*10: rg_delete          — 删除整个头，本轮不采用 */
+};
+
+static size_t rg_ops_count(void) {
+    return sizeof(k_rg_ops) / sizeof(k_rg_ops[0]);
+}
+
 void mutate_range(rtsp_packet_t *arr, size_t n){
-    if(!arr) return; rng_seed();
-    size_t M=sizeof(k_rg_ops)/sizeof(k_rg_ops[0]);
-    for(size_t i=0;i<n;i++){
-        range_header_rtsp_t *h=get_range(&arr[i]); if(!h) continue;
-        if(h->name[0]=='\0') add_range(arr+i,1,NULL,NULL);
-        k_rg_ops[rand()%M](h);
+    if (!arr) return;
+    rng_seed();
+    size_t M = rg_ops_count();
+
+    for (size_t i = 0; i < n; i++) {
+        range_header_rtsp_t *h = get_range(&arr[i]);
+        if (!h) continue;
+
+        if (h->name[0] == '\0') {
+            add_range(arr + i, 1, NULL, NULL);  /* 填一个最小合法骨架 */
+        }
+
+        /* 只从“语法合法”的 Range 变体中按权重选择 */
+        size_t idx = weighted_pick_idx(weights_rg_ops, M);
+        k_rg_ops[idx](h);
     }
 }
+
 
 /* =======================================================
    3) Referer
@@ -3429,15 +4136,46 @@ static rf_op_fn k_rf_ops[] = {
     rf_lowercase_name, rf_missing_crlf, rf_long_uri, rf_quoted,
     rf_two_values, rf_delete
 };
+/* —— Referer 变异算子权重：只保留语法合法变体 —— */
+static const int weights_rf_ops[11] = {
+    100, /* 0: rf_ok_rtsp       — 合法：rtsp://... */
+    100, /* 1: rf_ok_http       — 合法：http://... */
+    100, /* 2: rf_no_schema     — 合法：无 schema 的相对/路径形式 */
+      0, /* 3: rf_empty         — 空值（非法） */
+      0, /* 4: rf_bad_sep       — 分隔符错误（非法） */
+      0, /* 5: rf_lowercase_name— 头名小写（非法） */
+      0, /* 6: rf_missing_crlf  — 缺 CRLF，破坏报文结构 */
+    100, /* 7: rf_long_uri      — 合法：较长但语法正确的 URI */
+    100, /* 8: rf_quoted        — 合法：引号包裹的 URI */
+    100, /* 9: rf_two_values    — 合法：逗号分隔多 URI 列表 */
+      0, /*10: rf_delete        — 删除整个头，本轮禁用 */
+};
+
+static size_t rf_ops_count(void) {
+    return sizeof(k_rf_ops) / sizeof(k_rf_ops[0]);
+}
+
 void mutate_referer(rtsp_packet_t *arr, size_t n){
-    if(!arr) return; rng_seed();
-    size_t M=sizeof(k_rf_ops)/sizeof(k_rf_ops[0]);
-    for(size_t i=0;i<n;i++){
-        referer_header_rtsp_t *h=get_referer(&arr[i]); if(!h) continue;
-        if(h->name[0]=='\0') add_referer(arr+i,1,NULL);
-        k_rf_ops[rand()%M](h);
+    if (!arr) return;
+    rng_seed();
+
+    size_t M = rf_ops_count();
+
+    for (size_t i = 0; i < n; i++) {
+        referer_header_rtsp_t *h = get_referer(&arr[i]);
+        if (!h) continue;
+
+        if (h->name[0] == '\0') {
+            /* 构造一个最小合法骨架，避免未初始化字段 */
+            add_referer(arr + i, 1, NULL);
+        }
+
+        /* 只从语法合法的 Referer 变体中按权重选择 */
+        size_t idx = weighted_pick_idx(weights_rf_ops, M);
+        k_rf_ops[idx](h);
     }
 }
+
 
 
 
@@ -3502,15 +4240,44 @@ static rq_op_fn k_rq_ops[] = {
     rq_ok_one, rq_ok_multi, rq_empty_tag, rq_bad_sep, rq_lowercase_name,
     rq_missing_crlf, rq_long_tag, rq_weird_chars, rq_spaces_list, rq_delete
 };
+/* —— Require 变异算子权重：只保留语法合法/正常变体 —— */
+static const int weights_rq_ops[10] = {
+    100, /* 0: rq_ok_one        — 合法：单一 require-tag */
+    100, /* 1: rq_ok_multi      — 合法：多 require-tag 列表 */
+      0, /* 2: rq_empty_tag     — 空 tag（非法） */
+      0, /* 3: rq_bad_sep       — 分隔符错误（非法） */
+      0, /* 4: rq_lowercase_name— 头名小写（非法） */
+      0, /* 5: rq_missing_crlf  — 缺 CRLF，破坏报文结构 */
+    100, /* 6: rq_long_tag      — 合法：偏长但仍是合法 token */
+      0, /* 7: rq_weird_chars   — 含非法/奇怪字符（非法） */
+    100, /* 8: rq_spaces_list   — 合法：带空白的列表写法 */
+      0, /* 9: rq_delete        — 删除整个头，本轮禁用 */
+};
+
+static size_t rq_ops_count(void) {
+    return sizeof(k_rq_ops) / sizeof(k_rq_ops[0]);
+}
+
 void mutate_require(rtsp_packet_t *arr, size_t n){
-    if(!arr) return; rng_seed();
-    size_t M=sizeof(k_rq_ops)/sizeof(k_rq_ops[0]);
-    for(size_t i=0;i<n;i++){
-        require_header_rtsp_t *h=get_require(&arr[i]); if(!h) continue;
-        if(h->name[0]=='\0') add_require(arr+i,1,NULL);
-        k_rq_ops[rand()%M](h);
+    if (!arr) return;
+    rng_seed();
+
+    size_t M = rq_ops_count();
+
+    for (size_t i = 0; i < n; i++) {
+        require_header_rtsp_t *h = get_require(&arr[i]);
+        if (!h) continue;
+
+        if (h->name[0] == '\0') {
+            add_require(arr + i, 1, NULL);  /* 构造最小合法骨架 */
+        }
+
+        /* 只从语法合法的 Require 变体中按权重选择 */
+        size_t idx = weighted_pick_idx(weights_rq_ops, M);
+        k_rq_ops[idx](h);
     }
 }
+
 
 /* =======================================================
    2) Scale（仅 PLAY/RECORD）
@@ -3561,15 +4328,45 @@ static sc_op_fn k_sc_ops[] = {
     sc_ok_1, sc_ok_half, sc_ok_2, sc_zero, sc_negative,
     sc_big, sc_small, sc_bad_sep, sc_lowercase_name, sc_missing_crlf
 };
+/* —— Scale 变异算子权重：只保留语法合法且数值正常的变体 —— */
+static const int weights_sc_ops[10] = {
+    100, /* 0: sc_ok_1           — 合法：Scale: 1.0 */
+    100, /* 1: sc_ok_half        — 合法：Scale: 0.5 */
+    100, /* 2: sc_ok_2           — 合法：Scale: 2.0 */
+    100, /* 3: sc_zero           — 合法：Scale: 0.0 */
+      0, /* 4: sc_negative       — 负数（本轮按非法/不期望处理） */
+      0, /* 5: sc_big            — 超大缩放（攻击/极端边界，本轮禁用） */
+    100, /* 6: sc_small          — 合法：小范围随机缩放 */
+      0, /* 7: sc_bad_sep        — 分隔符错误（非法） */
+      0, /* 8: sc_lowercase_name — 头名小写（非法） */
+      0, /* 9: sc_missing_crlf   — 缺 CRLF，破坏报文结构（非法） */
+};
+
+static size_t sc_ops_count(void) {
+    return sizeof(k_sc_ops) / sizeof(k_sc_ops[0]);
+}
+
 void mutate_scale(rtsp_packet_t *arr, size_t n){
-    if(!arr) return; rng_seed();
-    size_t M=sizeof(k_sc_ops)/sizeof(k_sc_ops[0]);
-    for(size_t i=0;i<n;i++){
-        scale_header_rtsp_t *h=get_scale(&arr[i]); if(!h) continue;
-        if(h->name[0]=='\0') add_scale(arr+i,1,1.0f);
-        k_sc_ops[rand()%M](h);
+    if (!arr) return;
+    rng_seed();
+
+    size_t M = sc_ops_count();
+
+    for (size_t i = 0; i < n; i++) {
+        scale_header_rtsp_t *h = get_scale(&arr[i]);
+        if (!h) continue;
+
+        if (h->name[0] == '\0') {
+            /* 构造一个最小合法骨架 */
+            add_scale(arr + i, 1, 1.0f);
+        }
+
+        /* 只从“语法合法 + 数值正常”的 Scale 变体中按权重选择 */
+        size_t idx = weighted_pick_idx(weights_sc_ops, M);
+        k_sc_ops[idx](h);
     }
 }
+
 
 /* =======================================================
    3) Session
@@ -3640,13 +4437,44 @@ static ss_op_fn k_ss_ops[] = {
     ss_zero_timeout, ss_negative_timeout, ss_big_timeout, ss_bad_sep,
     ss_lowercase_name, ss_missing_crlf, ss_two_values
 };
+/* —— Session 变异算子权重：只保留语法合法/正常变体 —— */
+static const int weights_ss_ops[12] = {
+    100, /*  0: ss_ok_id_timeout      — 合法：ID + timeout */
+    100, /*  1: ss_ok_id_no_timeout   — 合法：ID，无 timeout */
+      0, /*  2: ss_empty_id           — 空 ID（非法） */
+      0, /*  3: ss_nonhex_id          — 非 hex/异常字符 ID（非法） */
+    100, /*  4: ss_long_id            — 合法：偏长但正常的 ID */
+    100, /*  5: ss_zero_timeout       — 合法：timeout=0 */
+      0, /*  6: ss_negative_timeout   — 负 timeout（非法） */
+      0, /*  7: ss_big_timeout        — 超大 timeout（攻击/极端边界） */
+      0, /*  8: ss_bad_sep            — 分隔符错误（非法） */
+      0, /*  9: ss_lowercase_name     — 头名小写（非法） */
+      0, /* 10: ss_missing_crlf       — 缺 CRLF，破坏报文结构 */
+      0, /* 11: ss_two_values         — 一个头两个值，本轮禁用 */
+};
+
+static size_t ss_ops_count(void) {
+    return sizeof(k_ss_ops) / sizeof(k_ss_ops[0]);
+}
+
 void mutate_session(rtsp_packet_t *arr, size_t n){
-    if(!arr) return; rng_seed();
-    size_t M=sizeof(k_ss_ops)/sizeof(k_ss_ops[0]);
-    for(size_t i=0;i<n;i++){
-        session_header_rtsp_t *h=get_session(&arr[i]); if(!h) continue;
-        if(h->name[0]=='\0') add_session(arr+i,1,NULL,60);
-        k_ss_ops[rand()%M](h);
+    if (!arr) return;
+    rng_seed();
+
+    size_t M = ss_ops_count();
+
+    for (size_t i = 0; i < n; i++) {
+        session_header_rtsp_t *h = get_session(&arr[i]);
+        if (!h) continue;
+
+        if (h->name[0] == '\0') {
+            /* 构造一个最小合法骨架：合法 ID + 合理 timeout */
+            add_session(arr + i, 1, NULL, 60);
+        }
+
+        /* 只从“语法合法/正常”的 Session 变体中按权重选择 */
+        size_t idx = weighted_pick_idx(weights_ss_ops, M);
+        k_ss_ops[idx](h);
     }
 }
 
@@ -3691,15 +4519,44 @@ static void sp_badsep(speed_header_rtsp_t* h){ sp_ok1(h); set_cstr(h->colon_spac
 static void sp_lower(speed_header_rtsp_t* h){ sp_ok1(h); set_cstr(h->name, sizeof(h->name), "speed"); }
 static void sp_no_crlf(speed_header_rtsp_t* h){ sp_ok1(h); h->crlf[0]='\n'; h->crlf[1]='\0'; }
 static sp_op_fn k_sp_ops[] = { sp_ok1, sp_half, sp_double, sp_zero, sp_negative, sp_big, sp_small, sp_badsep, sp_lower, sp_no_crlf };
+/* —— Speed 变异算子权重：只保留语法合法且数值正常的变体 —— */
+static const int weights_sp_ops[10] = {
+    100, /* 0: sp_ok1       — 合法：Speed: 1.0 */
+    100, /* 1: sp_half      — 合法：Speed: 0.5 */
+    100, /* 2: sp_double    — 合法：Speed: 2.0 */
+    100, /* 3: sp_zero      — 合法：Speed: 0.0 */
+      0, /* 4: sp_negative  — 负数，本轮视为非法/不期望 */
+      0, /* 5: sp_big       — 超大值（攻击/极端边界，本轮禁用） */
+    100, /* 6: sp_small     — 合法：很小但正常的正数 */
+      0, /* 7: sp_badsep    — 分隔符错误（非法） */
+      0, /* 8: sp_lower     — 头名小写（非法） */
+      0, /* 9: sp_no_crlf   — 缺 CRLF，破坏报文结构（非法） */
+};
+
+static size_t sp_ops_count(void) {
+    return sizeof(k_sp_ops) / sizeof(k_sp_ops[0]);
+}
+
 void mutate_speed(rtsp_packet_t *arr, size_t n){
-    if(!arr) return; rng_seed();
-    size_t M=sizeof(k_sp_ops)/sizeof(k_sp_ops[0]);
-    for(size_t i=0;i<n;i++){
-        speed_header_rtsp_t *h=get_speed(&arr[i]); if(!h) continue;
-        if(h->name[0]=='\0') add_speed(arr+i,1,1.0f);
-        k_sp_ops[rand()%M](h);
+    if (!arr) return;
+    rng_seed();
+
+    size_t M = sp_ops_count();
+
+    for (size_t i = 0; i < n; i++) {
+        speed_header_rtsp_t *h = get_speed(&arr[i]);
+        if (!h) continue;
+
+        if (h->name[0] == '\0') {
+            add_speed(arr + i, 1, 1.0f);  /* 构造最小合法骨架 */
+        }
+
+        /* 只从“语法合法 + 数值正常”的 Speed 变体中按权重选择 */
+        size_t idx = weighted_pick_idx(weights_sp_ops, M);
+        k_sp_ops[idx](h);
     }
 }
+
 
 /* =======================================================
    2) Transport（仅 SETUP，必选）
@@ -3763,15 +4620,46 @@ static tp_op_fn k_tp_ops[] = {
     tp_bad_prefix, tp_miss_semicolon1, tp_miss_semicolon2,
     tp_lower_name, tp_no_crlf, tp_illegal_chars, tp_very_long_proto
 };
+/* —— Transport 变异算子权重：只保留语法合法、结构正常的变体 —— */
+static const int weights_tp_ops[12] = {
+    100, /* 0: tp_ok_uni          — 合法：unicast Transport */
+    100, /* 1: tp_ok_multi        — 合法：multicast Transport */
+    100, /* 2: tp_tcp             — 合法：TCP 传输 */
+    100, /* 3: tp_only_one_port   — 合法：只写一个端口 */
+    100, /* 4: tp_rev_ports       — 合法：端口顺序反转但格式正确 */
+      0, /* 5: tp_bad_prefix      — 非法前缀（非法） */
+      0, /* 6: tp_miss_semicolon1 — 缺少分号（非法） */
+      0, /* 7: tp_miss_semicolon2 — 缺少分号（非法） */
+      0, /* 8: tp_lower_name      — 头名小写（非法） */
+      0, /* 9: tp_no_crlf         — 缺 CRLF，破坏报文结构 */
+      0, /*10: tp_illegal_chars   — 含非法字符（非法） */
+      0, /*11: tp_very_long_proto — 超长 proto（边界/攻击，本轮禁用） */
+};
+
+static size_t tp_ops_count(void) {
+    return sizeof(k_tp_ops) / sizeof(k_tp_ops[0]);
+}
+
 void mutate_transport(rtsp_packet_t *arr, size_t n){
-    if(!arr) return; rng_seed();
-    size_t M=sizeof(k_tp_ops)/sizeof(k_tp_ops[0]);
-    for(size_t i=0;i<n;i++){
-        transport_header_rtsp_t *h=get_transport(&arr[i]); if(!h) continue;
-        if(h->name[0]=='\0') add_transport(arr+i,1,NULL,NULL,NULL);
-        k_tp_ops[rand()%M](h);
+    if (!arr) return;
+    rng_seed();
+
+    size_t M = tp_ops_count();
+
+    for (size_t i = 0; i < n; i++) {
+        transport_header_rtsp_t *h = get_transport(&arr[i]);
+        if (!h) continue;
+
+        if (h->name[0] == '\0') {
+            add_transport(arr + i, 1, NULL, NULL, NULL);  /* 补一个最小合法骨架 */
+        }
+
+        /* 只从“语法合法”的 Transport 变体中按权重选择 */
+        size_t idx = weighted_pick_idx(weights_tp_ops, M);
+        k_tp_ops[idx](h);
     }
 }
+
 
 /* =======================================================
    3) User-Agent（多数请求可带）
@@ -3827,13 +4715,43 @@ static void ua_lower_name(user_agent_header_rtsp_t* h){ ua_ok(h); set_cstr(h->na
 static void ua_bad_sep(user_agent_header_rtsp_t* h){ ua_ok(h); set_cstr(h->colon_space,3,":"); }
 static void ua_no_crlf(user_agent_header_rtsp_t* h){ ua_ok(h); h->crlf[0]='\n'; h->crlf[1]='\0'; }
 static ua_op_fn k_ua_ops[] = { ua_ok, ua_blank, ua_long, ua_inject, ua_tabs, ua_utf8, ua_many_products, ua_lower_name, ua_bad_sep, ua_no_crlf };
+/* —— User-Agent 变异算子权重：只保留语法合法/常见变体 —— */
+static const int weights_ua_ops[10] = {
+    100, /* 0: ua_ok            — 合法：典型 User-Agent */
+      0, /* 1: ua_blank         — 空值（本轮视为非法/不期望） */
+    100, /* 2: ua_long          — 合法：较长但仍正常的 UA 串 */
+      0, /* 3: ua_inject        — 注入特殊/控制字符（非法/攻击） */
+    100, /* 4: ua_tabs          — 合法：含 TAB/额外空白的 UA */
+      0, /* 5: ua_utf8          — 含 UTF-8 / 非 ASCII（本轮禁用） */
+    100, /* 6: ua_many_products — 合法：多 product 串组合 */
+      0, /* 7: ua_lower_name    — 头名小写（非法） */
+      0, /* 8: ua_bad_sep       — 分隔符错误（非法） */
+      0, /* 9: ua_no_crlf       — 缺 CRLF，破坏报文结构 */
+};
+
+static size_t ua_ops_count(void) {
+    return sizeof(k_ua_ops) / sizeof(k_ua_ops[0]);
+}
+
+
 void mutate_user_agent(rtsp_packet_t *arr, size_t n){
-    if(!arr) return; rng_seed();
-    size_t M=sizeof(k_ua_ops)/sizeof(k_ua_ops[0]);
-    for(size_t i=0;i<n;i++){
-        user_agent_header_rtsp_t *h=get_user_agent(&arr[i]); if(!h) continue;
-        if(h->name[0]=='\0') add_user_agent(arr+i,1,NULL);
-        k_ua_ops[rand()%M](h);
+    if (!arr) return;
+    rng_seed();
+
+    size_t M = ua_ops_count();
+
+    for (size_t i = 0; i < n; i++) {
+        user_agent_header_rtsp_t *h = get_user_agent(&arr[i]);
+        if (!h) continue;
+
+        if (h->name[0] == '\0') {
+            /* 构造一个最小合法骨架，比如 "User-Agent: fuzz/1.0" */
+            add_user_agent(arr + i, 1, NULL);
+        }
+
+        /* 只从“语法合法/常见”的 User-Agent 变体中按权重选择 */
+        size_t idx = weighted_pick_idx(weights_ua_ops, M);
+        k_ua_ops[idx](h);
     }
 }
 
@@ -3905,15 +4823,47 @@ static via_op_fn k_via_ops[] = {
     via_empty_host, via_long_host, via_bad_sep, via_no_crlf,
     via_inject, via_multi_hops, via_illegal_proto
 };
+/* —— Via 变异算子权重：只保留语法合法/正常变体 —— */
+static const int weights_via_ops[12] = {
+    100, /*  0: via_ok           — 合法：标准 Via 行 */
+    100, /*  1: via_rtsp2        — 合法：RTSP/2.0 形式 */
+      0, /*  2: via_lower_name   — 头名小写（非法） */
+      0, /*  3: via_no_space     — 缺空格（非法） */
+    100, /*  4: via_ipv6         — 合法：IPv6 host */
+      0, /*  5: via_empty_host   — 空 host（非法） */
+    100, /*  6: via_long_host    — 合法：较长但合法的 host */
+      0, /*  7: via_bad_sep      — 分隔符错误（非法） */
+      0, /*  8: via_no_crlf      — 缺 CRLF，破坏报文结构 */
+      0, /*  9: via_inject       — 注入非法/控制字符（非法） */
+    100, /* 10: via_multi_hops   — 合法：多 hop Via 列表 */
+      0, /* 11: via_illegal_proto— 非法 proto 名（非法） */
+};
+
+static size_t via_ops_count(void) {
+    return sizeof(k_via_ops) / sizeof(k_via_ops[0]);
+}
+
 void mutate_via(rtsp_packet_t *arr, size_t n){
-    if(!arr) return; rng_seed();
-    size_t M=sizeof(k_via_ops)/sizeof(k_via_ops[0]);
-    for(size_t i=0;i<n;i++){
-        via_header_rtsp_t *h=get_via(&arr[i]); if(!h) continue;
-        if(h->name[0]=='\0') add_via(arr+i,1,NULL,NULL);
-        k_via_ops[rand()%M](h);
+    if (!arr) return;
+    rng_seed();
+
+    size_t M = via_ops_count();
+
+    for (size_t i = 0; i < n; i++) {
+        via_header_rtsp_t *h = get_via(&arr[i]);
+        if (!h) continue;
+
+        if (h->name[0] == '\0') {
+            /* 构造一个最小合法 Via 骨架 */
+            add_via(arr + i, 1, NULL, NULL);
+        }
+
+        /* 只从“语法合法/正常”的 Via 变体中按权重选择 */
+        size_t idx = weighted_pick_idx(weights_via_ops, M);
+        k_via_ops[idx](h);
     }
 }
+
 
 /* 统一签名 */
 typedef void (*rtsp_mutator_fn)(rtsp_packet_t *pkt, size_t num_packets);

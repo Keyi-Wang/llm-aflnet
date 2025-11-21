@@ -456,6 +456,14 @@ u32 M2_cal_cnt = 0;
 u32 M3_cal_cnt = 0;
 u32 M3_cur_cnt = 0;
 u32 M2_cur_cnt = 0;
+u32 semantic_parse_succ = 0;
+u32 semantic_total_sent = 0;
+u32 grammar_parse_succ = 0;
+u32 grammar_cal_succ = 0;
+u32 semantic_cal_succ = 0;
+u32 semantic_cal_total = 0;
+double semantic_succ_ratio = 0;
+double grammar_succ_ratio = 0.0;
 static uint64_t g_sem_total_ns = 0;
 void* generate_packets_by_protocol(const char* protocol_name, int count) {
     if (strcmp(protocol_name, "MQTT") == 0) {
@@ -1122,11 +1130,14 @@ int send_over_network()
   //write the request messages
   kliter_t(lms) *it;
   messages_sent = 0;
-  // if(strcmp(stage_short,"dry")){
-  //   M1_cal_cnt += M2_start_region_ID;
-  //   M3_cal_cnt += M3_cur_cnt;
-  //   M2_cal_cnt += M2_cur_cnt;
-  // }
+  if(strcmp(stage_short,"dry")){
+    M1_cal_cnt += M2_start_region_ID;
+    M3_cal_cnt += M3_cur_cnt;
+    M2_cal_cnt += M2_cur_cnt;
+  }
+  if(strcmp(stage_short,"sem")==0) {
+    semantic_total_sent = semantic_total_sent + M2_start_region_ID + M2_cur_cnt + M3_cur_cnt;
+  }
   for (it = kl_begin(kl_messages); it != kl_end(kl_messages); it = kl_next(it)) {
     n = net_send(sockfd, timeout, kl_val(it)->mdata, kl_val(it)->msize);
     messages_sent++;
@@ -4533,24 +4544,24 @@ static void check_term_size(void);
 #include <sys/types.h>
 
 static _Atomic uint64_t g_pkt_total = 0;
-static _Atomic uint64_t g_pkt_error = 0;
-static _Atomic uint64_t g_pkt_not_suc = 0;
+static _Atomic uint64_t g_pkt_suc = 0;
+static _Atomic uint64_t g_pkt_gram_suc = 0;
 static int   stats_fd   = -1;                 // CSV 追加日志（可选）
 static char  stats_path[512];                 // CSV 路径
 static char  state_path[512];                 // 累计状态文件
 static char  state_tmp_path[512];             // 临时文件用于原子覆盖
 
 static void stats_load_state(void) {
-    const char *state = getenv("MOSQ_FUZZ_STATE");
-    if (!state || !*state) state = "/tmp/mosq_fuzz_state.txt";
+    const char *state = getenv("LIVE555_FUZZ_STATE");
+    if (!state || !*state) state = "/tmp/live555_state.txt";
     snprintf(state_path, sizeof(state_path), "%s", state);
     FILE *fp = fopen(state_path, "r");
     if (!fp) return; // 首次运行，没有就算了
-    uint64_t t=0, e=0, r=0;
-    if (fscanf(fp, "%" SCNu64 " %" SCNu64 " %" SCNu64, &t, &e, &r) == 3) {
+    uint64_t t=0, e=0, r=0, g=0;
+    if (fscanf(fp, "%" SCNu64 " %" SCNu64 " %" SCNu64, &t, &r, &g) == 3) {
         atomic_store(&g_pkt_total, t);
-        atomic_store(&g_pkt_error, e);
-        atomic_store(&g_pkt_not_suc, r);
+        atomic_store(&g_pkt_suc, r);
+        atomic_store(&g_pkt_gram_suc, g);
     }
     fclose(fp);
 }
@@ -4613,10 +4624,15 @@ static void maybe_update_plot_file(double bitmap_cvg, double eps) {
      execs_per_sec */
 
   fprintf(plot_file,
-          "%llu, %llu, %u, %u, %u, %u, %0.02f%%, %llu, %llu, %u, %0.02f, %d, %d\n",
-          get_cur_time() / 1000, queue_cycle - 1, current_entry, queued_paths,
-          pending_not_fuzzed, pending_favored, bitmap_cvg, unique_crashes,
-          unique_hangs, max_depth, eps, prev_nodes, prev_edges); /* ignore errors */
+        "%llu, %llu, %u, %u, %u, %u, %0.02f%%, %llu, %llu, %u, %0.02f, %u, %u, %u, %llu, %llu, %u, %u, %u, %.3f, %u, %u, %u, %.3f, %.3f\n",
+        get_cur_time() / 1000, queue_cycle - 1, current_entry, queued_paths,
+        pending_not_fuzzed, pending_favored, bitmap_cvg, unique_crashes,
+        unique_hangs, max_depth, eps, M2_start_region_ID, M2_region_count,
+        region_cnt, (unsigned long long)g_pkt_total,
+        (unsigned long long)g_pkt_suc, M1_cal_cnt, M2_cal_cnt, M3_cal_cnt,
+        (g_sem_total_ns / 1e9), semantic_cal_succ, grammar_cal_succ, semantic_cal_total, semantic_succ_ratio, grammar_succ_ratio);
+
+
 
   fflush(plot_file);
 
@@ -5647,7 +5663,7 @@ EXP_ST u8 common_fuzz_stuff(char** argv, u8* out_buf, u32 len) {
   u32 region_count = 0;
   region_t *regions = (*extract_requests)(out_buf, len, &region_count);
   if (!region_count) PFATAL("AFLNet Region count cannot be Zero");
-  // M2_cur_cnt = region_count;
+  M2_cur_cnt = region_count > max_seed_region_count ? max_seed_region_count : region_count;
   // update kl_messages linked list
   u32 i;
   kliter_t(lms) *prev_last_message, *cur_last_message;
@@ -6219,7 +6235,7 @@ AFLNET_REGIONS_SELECTION:;
     M2_region_count = UR(total_region - M2_start_region_ID);
     if (M2_region_count == 0) M2_region_count++; //Mutate one region at least
   }
-  // region_calculate(queue_cur->region_count, M2_start_region_ID, M2_region_count);
+  region_calculate(queue_cur->region_count, M2_start_region_ID, M2_region_count);
   /* Construct the kl_messages linked list and identify boundary pointers (M2_prev and M2_next) */
   kl_messages = construct_kl_messages(queue_cur->fname, queue_cur->regions, queue_cur->region_count);
 
@@ -7302,10 +7318,15 @@ if (!pkt_num) {
 
 mqtt_packet_t *seed_pkts = malloc(pkt_num * sizeof(*seed_pkts));
 memcpy(seed_pkts, packets, pkt_num * sizeof(*seed_pkts));
+stats_load_state();
 uint64_t __t0_sem = sem_now_ns();   /* 入口打点 */ 
 // Step 2: Choose a random field in the structured messages and apply LLM-generated mutator to it. Return mutated structured messages(M2').
 stage_name  = "semantic";
 stage_short = "sem";
+
+semantic_parse_succ = g_pkt_suc;
+grammar_parse_succ = g_pkt_gram_suc;
+semantic_total_sent = 0;
 // Step 3: Repeat Step 2 for a random number of times.
 stage_max   = (doing_det ? HAVOC_CYCLES_INIT : HAVOC_CYCLES) *
                   perf_score / havoc_div / 100;
@@ -7337,7 +7358,7 @@ for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
     fix_mqtt(packets, pkt_num);
   }
   else if(strcmp(protocol_name, "RTSP") == 0){
-    fix_rtsp(packets, pkt_num);
+    // fix_rtsp(packets, pkt_num);
   }
   else if(strcmp(protocol_name, "FTP") == 0){
     fix_ftp(packets, pkt_num);
@@ -7414,7 +7435,15 @@ for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
   }
 
 }
+stats_load_state();
 g_sem_total_ns += (sem_now_ns() - __t0_sem);  /* 退出累加 */
+semantic_parse_succ = g_pkt_suc - semantic_parse_succ;
+semantic_cal_succ += semantic_parse_succ;
+grammar_parse_succ = g_pkt_gram_suc - grammar_parse_succ;
+grammar_cal_succ += grammar_parse_succ;
+semantic_cal_total += semantic_total_sent;
+semantic_succ_ratio = (double)semantic_cal_succ / (double)semantic_cal_total;
+grammar_succ_ratio = (double)grammar_cal_succ / (double)semantic_cal_total;
 free(packets);
 free(seed_pkts);
 real_havoc_stage:
@@ -8706,7 +8735,7 @@ EXP_ST void setup_dirs_fds(void) {
 
   fprintf(plot_file, "# unix_time, cycles_done, cur_path, paths_total, "
                      "pending_total, pending_favs, map_size, unique_crashes, "
-                     "unique_hangs, max_depth, execs_per_sec, n_nodes, n_edges\n");
+                     "unique_hangs, max_depth, execs_per_sec, M2_start_region_ID, M2_region_count, region_cnt, server_receive_cnt, parser_success, M1_cal_cnt, M2_cal_cnt, M3_cal_cnt, semantic_exec_time, semantic_cal_succ, grammar_cal_succ, semantic_cal_total, semantic_succ_ratio, grammar_succ_ratio\n");
                      /* ignore errors */
 
 }

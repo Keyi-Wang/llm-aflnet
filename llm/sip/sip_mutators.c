@@ -221,28 +221,45 @@ static void op_garbage_token(sip_accept_hdr_t *h, unsigned *rs) {
         h->sub_type[0] = '\0';
     }
 }
-
-/* 将一条 Accept 的 media_type 做一次随机变异（从 ≥12 个算子中挑选） */
+/* 将一条 Accept 的 media_type 做一次随机“合法变异”（只筛选合法算子） */
 static void mutate_one_media_type(sip_accept_hdr_t *h, unsigned *rs) {
     /* 确保头存在基本形态，避免空 name 导致重组器不输出 */
     if (h->name[0] == '\0') accept_set_present_default(h);
 
-    switch (rnd_pick(rs, 12)) {
-    case 0:  op_set_common_valid(h, rs);         break; // 合法：常见主类型
-    case 1:  op_set_star(h);                     break; // 合法：*
-    case 2:  op_set_star_star(h);                break; // 合法：*/*
-    case 3:  op_empty(h);                        break; // 非法：空
-    case 4:  op_maxlen_fill(h);                  break; // 边界：最大长度
-    case 5:  op_invalid_chars(h);                break; // 非法：空格/分号/等号
-    case 6:  op_toggle_case(h);                  break; // 合法：大小写摇摆
-    case 7:  op_vendor_x(h, rs);                 break; // 可疑：厂商前缀
-    case 8:  op_params_misplaced(h);             break; // 非法：参数错位到主类型
-    case 9:  op_double_slash(h);                 break; // 非法：双斜杠
-    case 10: op_no_slash_but_subtype(h);         break; // 不一致：无斜杠但有 subtype
-    case 11: op_crlf_inject_repeat(h);           break; // 重复：CRLF 注入第二个 Accept
-    default: op_non_ascii(h);                    break; // 非法：非 ASCII/控制字节
+    /* 只从合法算子里选：0,2,6,7 */
+    static const unsigned legal_ops[] = {0, 2, 6, 7};
+    unsigned op = legal_ops[rnd_pick(rs, (unsigned)(sizeof(legal_ops)/sizeof(legal_ops[0])))];
+
+    switch (op) {
+    case 0:  op_set_common_valid(h, rs); break; // 合法：常见主类型 type/subtype
+    case 2:  op_set_star_star(h);        break; // 合法：*/*
+    case 6:  op_toggle_case(h);          break; // 合法：大小写摇摆（不改结构）
+    case 7:  op_vendor_x(h, rs);         break; // 合法：厂商前缀（仍为合法 token）
+    default: op_set_common_valid(h, rs); break;
     }
 }
+
+// /* 将一条 Accept 的 media_type 做一次随机变异（从 ≥12 个算子中挑选） */
+// static void mutate_one_media_type(sip_accept_hdr_t *h, unsigned *rs) {
+//     /* 确保头存在基本形态，避免空 name 导致重组器不输出 */
+//     if (h->name[0] == '\0') accept_set_present_default(h);
+
+//     switch (rnd_pick(rs, 12)) {
+//     case 0:  op_set_common_valid(h, rs);         break; // 合法：常见主类型
+//     case 1:  op_set_star(h);                     break; // 合法：*
+//     case 2:  op_set_star_star(h);                break; // 合法：*/*
+//     case 3:  op_empty(h);                        break; // 非法：空
+//     case 4:  op_maxlen_fill(h);                  break; // 边界：最大长度
+//     case 5:  op_invalid_chars(h);                break; // 非法：空格/分号/等号
+//     case 6:  op_toggle_case(h);                  break; // 合法：大小写摇摆
+//     case 7:  op_vendor_x(h, rs);                 break; // 可疑：厂商前缀
+//     case 8:  op_params_misplaced(h);             break; // 非法：参数错位到主类型
+//     case 9:  op_double_slash(h);                 break; // 非法：双斜杠
+//     case 10: op_no_slash_but_subtype(h);         break; // 不一致：无斜杠但有 subtype
+//     case 11: op_crlf_inject_repeat(h);           break; // 重复：CRLF 注入第二个 Accept
+//     default: op_non_ascii(h);                    break; // 非法：非 ASCII/控制字节
+//     }
+// }
 
 /* ---------- 对外：主 mutator ----------
    在给定的报文数组上，针对可含 Accept 的请求变异其 media_type 字段 */
@@ -257,8 +274,7 @@ void mutate_accept_media_type(sip_packet_t *pkts, size_t npkts, unsigned seed) {
         }
         sip_accept_hdr_t *h = ensure_accept_hdr_for_pkt(p);
         if (!h) continue;
-        /* 每条做 1~3 次独立变异，形成更“脏”的组合 */
-        int times = 1 + (int)rnd_pick(&rs, 3);
+        int times = 1 ;
         for (int t = 0; t < times; ++t) {
             mutate_one_media_type(h, &rs);
         }
@@ -382,25 +398,45 @@ static void st_non_ascii(sip_accept_hdr_t *h) {
     h->sub_type[0] = (char)0xFF; h->sub_type[1]=(char)0xFE; h->sub_type[2]='x'; h->sub_type[3]=0;
     if (!h->slash) h->slash = '/';
 }
+// static void mutate_one_sub_type(sip_accept_hdr_t *h, unsigned *rs) {
+//     /* 确保头与主类型可输出 */
+//     if (h->name[0] == '\0') accept_set_present_default(h);
+//     if (!h->media_type[0]) scpy(h->media_type, sizeof h->media_type, "application");
+//     if (!h->slash) h->slash = '/';
+
+//     switch (rnd_pick(rs, 12)) {
+//     case 0:  st_set_common_valid(h, rs);   break;
+//     case 1:  st_wildcard(h);               break;
+//     case 2:  st_empty(h);                  break;
+//     case 3:  st_maxlen(h);                 break;
+//     case 4:  st_invalid_chars(h);          break;
+//     case 5:  st_toggle_case(h);            break;
+//     case 6:  st_vendor_tree(h, rs);        break;
+//     case 7:  st_param_injection(h);        break;
+//     case 8:  st_crlf_inject(h);            break;
+//     case 9:  st_leading_slash(h);          break;
+//     case 10: st_non_ascii(h);              break;
+//     default: st_set_common_valid(h, rs);   break;
+//     }
+// }
 static void mutate_one_sub_type(sip_accept_hdr_t *h, unsigned *rs) {
     /* 确保头与主类型可输出 */
     if (h->name[0] == '\0') accept_set_present_default(h);
     if (!h->media_type[0]) scpy(h->media_type, sizeof h->media_type, "application");
     if (!h->slash) h->slash = '/';
 
-    switch (rnd_pick(rs, 12)) {
-    case 0:  st_set_common_valid(h, rs);   break;
-    case 1:  st_wildcard(h);               break;
-    case 2:  st_empty(h);                  break;
-    case 3:  st_maxlen(h);                 break;
-    case 4:  st_invalid_chars(h);          break;
-    case 5:  st_toggle_case(h);            break;
-    case 6:  st_vendor_tree(h, rs);        break;
-    case 7:  st_param_injection(h);        break;
-    case 8:  st_crlf_inject(h);            break;
-    case 9:  st_leading_slash(h);          break;
-    case 10: st_non_ascii(h);              break;
-    default: st_set_common_valid(h, rs);   break;
+    /* 只从合法算子里选：0,1,5,6 */
+    static const unsigned legal_ops[] = {0, 1, 5, 6};
+    unsigned op = legal_ops[
+        rnd_pick(rs, (unsigned)(sizeof(legal_ops)/sizeof(legal_ops[0])))
+    ];
+
+    switch (op) {
+    case 0:  st_set_common_valid(h, rs); break; // 合法：常见 subtype
+    case 1:  st_wildcard(h);             break; // 合法：*
+    case 5:  st_toggle_case(h);          break; // 合法：大小写扰动
+    case 6:  st_vendor_tree(h, rs);      break; // 合法：vnd/x- 系列
+    default: st_set_common_valid(h, rs); break;
     }
 }
 
@@ -430,23 +466,39 @@ static void ps_header_inject(sip_accept_hdr_t *h) { scpy(h->params, sizeof h->pa
 static void ps_comma_new_range(sip_accept_hdr_t *h) { scpy(h->params, sizeof h->params, ";q=0.7, text/html;q=0.1"); }
 static void ps_control_bytes(sip_accept_hdr_t *h) { h->params[0]=';'; h->params[1]=1; h->params[2]=2; h->params[3]='x'; h->params[4]=0; }
 
+// static void mutate_one_params(sip_accept_hdr_t *h, unsigned *rs) {
+//     if (h->name[0] == '\0') accept_set_present_default(h);
+//     switch (rnd_pick(rs, 14)) {
+//     case 0:  ps_set_valid_basic(h);     break;
+//     case 1:  ps_empty(h);               break;
+//     case 2:  ps_q_out_of_range(h);      break;
+//     case 3:  ps_q_negative(h);          break;
+//     case 4:  ps_q_missing_eq(h);        break;
+//     case 5:  ps_q_missing_val(h);       break;
+//     case 6:  ps_double_semicolon(h);    break;
+//     case 7:  ps_very_long(h);           break;
+//     case 8:  ps_duplicate_keys(h);      break;
+//     case 9:  ps_with_spaces(h);         break;
+//     case 10: ps_quoted_string(h);       break;
+//     case 11: ps_header_inject(h);       break;
+//     case 12: ps_comma_new_range(h);     break;
+//     default: ps_control_bytes(h);       break;
+//     }
+// }
 static void mutate_one_params(sip_accept_hdr_t *h, unsigned *rs) {
     if (h->name[0] == '\0') accept_set_present_default(h);
-    switch (rnd_pick(rs, 14)) {
-    case 0:  ps_set_valid_basic(h);     break;
-    case 1:  ps_empty(h);               break;
-    case 2:  ps_q_out_of_range(h);      break;
-    case 3:  ps_q_negative(h);          break;
-    case 4:  ps_q_missing_eq(h);        break;
-    case 5:  ps_q_missing_val(h);       break;
-    case 6:  ps_double_semicolon(h);    break;
-    case 7:  ps_very_long(h);           break;
-    case 8:  ps_duplicate_keys(h);      break;
-    case 9:  ps_with_spaces(h);         break;
-    case 10: ps_quoted_string(h);       break;
-    case 11: ps_header_inject(h);       break;
-    case 12: ps_comma_new_range(h);     break;
-    default: ps_control_bytes(h);       break;
+
+    /* 只从“语法仍合法”的算子里选：0,8,10 */
+    static const unsigned legal_ops[] = {0, 8, 10};
+    unsigned op = legal_ops[
+        rnd_pick(rs, (unsigned)(sizeof(legal_ops)/sizeof(legal_ops[0])))
+    ];
+
+    switch (op) {
+    case 0:  ps_set_valid_basic(h);  break;  /* 合法基础参数 */
+    case 8:  ps_duplicate_keys(h);   break;  /* 语法合法：重复 accept-param */
+    case 10: ps_quoted_string(h);    break;  /* 语法合法：quoted-string 值 */
+    default: ps_set_valid_basic(h);  break;
     }
 }
 
@@ -469,9 +521,7 @@ static void params_repeat_inplace(sip_accept_hdr_t *h) {
     }
 }
 
-/* ---------------- 对外导出：mutate 与 增删重复（params） ---------------- */
 
-/* 总入口：对 sub_type & params 都做“强力”变异（各 1~3 次）。仅触达含 Accept 的请求 */
 void mutate_accept_sub_type_and_params(sip_packet_t *pkts, size_t npkts, unsigned seed) {
     unsigned rs = seed ? seed : 0xA11CEu;
     for (size_t i = 0; i < npkts; ++i) {
@@ -483,15 +533,13 @@ void mutate_accept_sub_type_and_params(sip_packet_t *pkts, size_t npkts, unsigne
         sip_accept_hdr_t *h = ensure_accept_hdr_for_pkt(p);
         if (!h) continue;
 
-        int n_sub = 1 + (int)rnd_pick(&rs, 3);   /* 1~3 次 subtype 变异 */
-        int n_par = 1 + (int)rnd_pick(&rs, 3);   /* 1~3 次 params 变异 */
+        if(rand()%2){
+            mutate_one_sub_type(h, &rs);
+        }
+        else{
+            mutate_one_params(h, &rs);
+        }
 
-        for (int t=0; t<n_sub; ++t) mutate_one_sub_type(h, &rs);
-        for (int t=0; t<n_par; ++t) mutate_one_params(h, &rs);
-
-        /* 随机制造“不一致”：有时去掉 slash 或补上 */
-        if ((rnd_pick(&rs,3)==0)) h->slash = 0;               /* 没有 '/' 但仍保留 subtype → 非法 */
-        if ((rnd_pick(&rs,5)==0) && !h->slash) h->slash = '/';/* 或反之补上 '/' */
     }
 }
 
@@ -597,31 +645,49 @@ static void dt_header_inject(sip_date_hdr_t *h){ scpy(h->rfc1123, sizeof h->rfc1
 static void dt_rfc850(sip_date_hdr_t *h) { scpy(h->rfc1123, sizeof h->rfc1123, "Saturday, 13-Nov-10 23:29:00 GMT"); }
 static void dt_ansi_ctime(sip_date_hdr_t *h) { scpy(h->rfc1123, sizeof h->rfc1123, "Sat Nov 13 23:29:00 2010"); }
 
-/* 随机选一个算子应用 1~3 次（叠加可能制造组合异常） */
+
+// static void mutate_one_date_value(sip_date_hdr_t *h, unsigned *rs) {
+//     if (h->name[0] == '\0') date_set_present_default(h);
+//     switch (rnd_pick(rs, 21)) {
+//       case 0:  dt_valid_now(h); break;
+//       case 1:  dt_fixed_past(h); break;
+//       case 2:  dt_fixed_future(h); break;
+//       case 3:  dt_bad_wkday(h); break;
+//       case 4:  dt_bad_month(h); break;
+//       case 5:  dt_day_32(h); break;
+//       case 6:  dt_hour_24(h); break;
+//       case 7:  dt_sec_60(h); break;
+//       case 8:  dt_no_gmt(h); break;
+//       case 9:  dt_tz_offset(h); break;
+//       case 10: dt_missing_comma(h); break;
+//       case 11: dt_lowercase(h); break;
+//       case 12: dt_spaces_tabs(h); break;
+//       case 13: dt_two_digit_year(h); break;
+//       case 14: dt_no_seconds(h); break;
+//       case 15: dt_empty(h); break;
+//       case 16: dt_maxlen(h); break;
+//       case 17: dt_ctrl_bytes(h); break;
+//       case 18: dt_header_inject(h); break;
+//       case 19: dt_rfc850(h); break;
+//       default: dt_ansi_ctime(h); break;
+//     }
+// }
 static void mutate_one_date_value(sip_date_hdr_t *h, unsigned *rs) {
     if (h->name[0] == '\0') date_set_present_default(h);
-    switch (rnd_pick(rs, 21)) {
-      case 0:  dt_valid_now(h); break;
-      case 1:  dt_fixed_past(h); break;
-      case 2:  dt_fixed_future(h); break;
-      case 3:  dt_bad_wkday(h); break;
-      case 4:  dt_bad_month(h); break;
-      case 5:  dt_day_32(h); break;
-      case 6:  dt_hour_24(h); break;
-      case 7:  dt_sec_60(h); break;
-      case 8:  dt_no_gmt(h); break;
-      case 9:  dt_tz_offset(h); break;
-      case 10: dt_missing_comma(h); break;
-      case 11: dt_lowercase(h); break;
-      case 12: dt_spaces_tabs(h); break;
-      case 13: dt_two_digit_year(h); break;
-      case 14: dt_no_seconds(h); break;
-      case 15: dt_empty(h); break;
-      case 16: dt_maxlen(h); break;
-      case 17: dt_ctrl_bytes(h); break;
-      case 18: dt_header_inject(h); break;
-      case 19: dt_rfc850(h); break;
-      default: dt_ansi_ctime(h); break;
+
+    /* 只从语法合法的算子中选：0,1,2,19,20 */
+    static const unsigned legal_ops[] = {0, 1, 2, 19, 20};
+    unsigned op = legal_ops[
+        rnd_pick(rs, (unsigned)(sizeof(legal_ops)/sizeof(legal_ops[0])))
+    ];
+
+    switch (op) {
+      case 0:  dt_valid_now(h);      break;  /* IMF-fixdate */
+      case 1:  dt_fixed_past(h);     break;  /* IMF-fixdate */
+      case 2:  dt_fixed_future(h);   break;  /* IMF-fixdate */
+      case 19: dt_rfc850(h);         break;  /* RFC850-date */
+      case 20: dt_ansi_ctime(h);     break;  /* asctime-date */
+      default: dt_valid_now(h);      break;
     }
 }
 
@@ -641,7 +707,7 @@ void mutate_date_rfc1123(sip_packet_t *pkts, size_t n_pkts, unsigned seed) {
         sip_date_hdr_t *h = ensure_date_hdr_for_pkt(p);
         if (!h) continue;
 
-        int times = 1 + (int)rnd_pick(&rs, 3); /* 1~3 次 */
+        int times = 1;
         for (int t=0; t<times; ++t) mutate_one_date_value(h, &rs);
     }
 }
@@ -754,33 +820,61 @@ void delete_##MSGNAME##_params(sip_packet_t *pkts, size_t n){ for(size_t i=0;i<n
 static void op_scheme_set(sip_encryption_hdr_t *h, const char *v){ scpy(h->scheme, sizeof h->scheme, v); }
 static void op_params_set(sip_encryption_hdr_t *h, const char *v){ scpy(h->params, sizeof h->params, v); }
 
+// static void mutate_one_enc(sip_encryption_hdr_t *h, unsigned *rs) {
+//     /* 0..19 → 20 种变异 */
+//     switch (rnd_pick(rs, 20)) {
+//       /* ---- scheme 合法/语义变体 ---- */
+//       case 0:  op_scheme_set(h, "pgp"); break;
+//       case 1:  op_scheme_set(h, "clear"); break;                 /* 明文声明 */
+//       case 2:  op_scheme_set(h, "s-mime"); break;                /* 历史/扩展 token */
+//       case 3:  op_scheme_set(h, "tls"); break;                   /* 非典型，但看栈容忍度 */
+//       /* ---- scheme 边界/非法 ---- */
+//       case 4:  h->scheme[0] = '\0'; break;                       /* 空 scheme（非法） */
+//       case 5:  op_scheme_set(h, " PGP"); break;                  /* 前置空格（非法） */
+//       case 6:  op_scheme_set(h, "pgp/1*bad"); break;             /* 非 token 字符 */
+//       case 7:  sfill(h->scheme, sizeof h->scheme, 'X', sizeof h->scheme-1); break; /* 过长 */
+//       /* ---- params：合法/常见 ---- */
+//       case 8:  op_params_set(h, ""); break;                      /* 空参数（合法） */
+//       case 9:  op_params_set(h, ";alg=pgp;key=abc123"); break;   /* 正常多参数 */
+//       case 10: op_params_set(h, ";alg=\"pgp\";key=\"a b c\""); break; /* 引号与空格 */
+//       case 11: op_params_set(h, ";iv=01020304;nonce=deadbeef"); break;
+//       /* ---- params：格式错误/注入/边界 ---- */
+//       case 12: op_params_set(h, "key=abc"); break;               /* 缺少前导 ';'（非法） */
+//       case 13: op_params_set(h, ";;;;"); break;                  /* 只有分号（非法/边界） */
+//       case 14: op_params_set(h, ";alg==pgp"); break;             /* 双 '='（非法） */
+//       case 15: op_params_set(h, ";alg=pgp;alg=clear"); break;    /* 重复键 */
+//       case 16: op_params_set(h, ";a="); break;                   /* 空值（非法边界） */
+//       case 17: { char tmp[SIP_PARAMS_LEN]; sfill(tmp, sizeof tmp, 'A', sizeof tmp-1); op_params_set(h, tmp); } break; /* 超长 */
+//       case 18: { char inj[64]; scpy(inj, sizeof inj, ";x=1\r\nVia: SIP/2.0/UDP evil"); op_params_set(h, inj); } break; /* 头注入 */
+//       default: { char odd[32]; odd[0]=(char)0x01; odd[1]='Z'; odd[2]=(char)0xFF; odd[3]=0; op_params_set(h, odd); } break; /* 控制字节/非ASCII */
+//     }
+// }
 static void mutate_one_enc(sip_encryption_hdr_t *h, unsigned *rs) {
-    /* 0..19 → 20 种变异 */
-    switch (rnd_pick(rs, 20)) {
+    /* 若 scheme 为空，先补一个合法 token，避免选 params 时形成非法头 */
+    if (h->scheme[0] == '\0') op_scheme_set(h, "pgp");
+
+    /* 只从语法合法的算子中选：0,1,2,3,7,8,9,10,11,15 */
+    static const unsigned legal_ops[] = {0, 1, 2, 3, 7, 8, 9, 10, 11, 15};
+    unsigned op = legal_ops[
+        rnd_pick(rs, (unsigned)(sizeof(legal_ops)/sizeof(legal_ops[0])))
+    ];
+
+    switch (op) {
       /* ---- scheme 合法/语义变体 ---- */
       case 0:  op_scheme_set(h, "pgp"); break;
-      case 1:  op_scheme_set(h, "clear"); break;                 /* 明文声明 */
-      case 2:  op_scheme_set(h, "s-mime"); break;                /* 历史/扩展 token */
-      case 3:  op_scheme_set(h, "tls"); break;                   /* 非典型，但看栈容忍度 */
-      /* ---- scheme 边界/非法 ---- */
-      case 4:  h->scheme[0] = '\0'; break;                       /* 空 scheme（非法） */
-      case 5:  op_scheme_set(h, " PGP"); break;                  /* 前置空格（非法） */
-      case 6:  op_scheme_set(h, "pgp/1*bad"); break;             /* 非 token 字符 */
-      case 7:  sfill(h->scheme, sizeof h->scheme, 'X', sizeof h->scheme-1); break; /* 过长 */
+      case 1:  op_scheme_set(h, "clear"); break;
+      case 2:  op_scheme_set(h, "s-mime"); break;
+      case 3:  op_scheme_set(h, "tls"); break;
+      case 7:  sfill(h->scheme, sizeof h->scheme, 'X', sizeof h->scheme-1); break;
+
       /* ---- params：合法/常见 ---- */
-      case 8:  op_params_set(h, ""); break;                      /* 空参数（合法） */
-      case 9:  op_params_set(h, ";alg=pgp;key=abc123"); break;   /* 正常多参数 */
-      case 10: op_params_set(h, ";alg=\"pgp\";key=\"a b c\""); break; /* 引号与空格 */
+      case 8:  op_params_set(h, ""); break;
+      case 9:  op_params_set(h, ";alg=pgp;key=abc123"); break;
+      case 10: op_params_set(h, ";alg=\"pgp\";key=\"a b c\""); break;
       case 11: op_params_set(h, ";iv=01020304;nonce=deadbeef"); break;
-      /* ---- params：格式错误/注入/边界 ---- */
-      case 12: op_params_set(h, "key=abc"); break;               /* 缺少前导 ';'（非法） */
-      case 13: op_params_set(h, ";;;;"); break;                  /* 只有分号（非法/边界） */
-      case 14: op_params_set(h, ";alg==pgp"); break;             /* 双 '='（非法） */
-      case 15: op_params_set(h, ";alg=pgp;alg=clear"); break;    /* 重复键 */
-      case 16: op_params_set(h, ";a="); break;                   /* 空值（非法边界） */
-      case 17: { char tmp[SIP_PARAMS_LEN]; sfill(tmp, sizeof tmp, 'A', sizeof tmp-1); op_params_set(h, tmp); } break; /* 超长 */
-      case 18: { char inj[64]; scpy(inj, sizeof inj, ";x=1\r\nVia: SIP/2.0/UDP evil"); op_params_set(h, inj); } break; /* 头注入 */
-      default: { char odd[32]; odd[0]=(char)0x01; odd[1]='Z'; odd[2]=(char)0xFF; odd[3]=0; op_params_set(h, odd); } break; /* 控制字节/非ASCII */
+      case 15: op_params_set(h, ";alg=pgp;alg=clear"); break;
+
+      default: op_scheme_set(h, "pgp"); op_params_set(h, ""); break;
     }
 }
 
@@ -790,11 +884,7 @@ void mutate_encryption_fields(sip_packet_t *pkts, size_t n_pkts, unsigned seed) 
         sip_encryption_hdr_t *h = ensure_enc_hdr_for_pkt(&pkts[i]);
         if (!h) continue;
 
-        /* 对 scheme 与 params 各进行 1~2 次变异（共 2~4 次），允许组合产生更复杂场景 */
-        int times_scheme = 1 + (int)rnd_pick(&rs, 2);
-        int times_params = 1 + (int)rnd_pick(&rs, 2);
-        for (int t=0; t<times_scheme; ++t) mutate_one_enc(h, &rs);  /* 中有 scheme/path 变体 */
-        for (int t=0; t<times_params; ++t) mutate_one_enc(h, &rs);
+        mutate_one_enc(h, &rs);
     }
 }
 
@@ -850,29 +940,54 @@ void delete_REGISTER_expires(sip_packet_t *pkts, size_t n, unsigned seed){
 }
 static void set_val(sip_expires_hdr_t *h, const char *v){ scpy(h->value, sizeof h->value, v); }
 
+// static void mutate_one_expires(sip_expires_hdr_t *h, unsigned *rs) {
+//     switch (rnd_pick(rs, 16)) {
+//       /* ---- 合法 delta-seconds ---- */
+//       case 0:  set_val(h, "0"); break;
+//       case 1:  set_val(h, "1"); break;
+//       case 2:  set_val(h, "60"); break;
+//       case 3:  set_val(h, "3600"); break;
+//       /* ---- 边界/非法数字 ---- */
+//       case 4:  set_val(h, "-1"); break;                 /* 负数 */
+//       case 5:  set_val(h, "4294967295"); break;         /* 2^32-1 边界 */
+//       case 6:  set_val(h, "9999999999"); break;         /* 极大值 */
+//       case 7:  set_val(h, "  300 \t"); break;           /* 前后空白 */
+//       /* ---- 格式错数字 ---- */
+//       case 8:  set_val(h, "12.34"); break;              /* 小数 */
+//       case 9:  set_val(h, "0x10"); break;               /* 十六进制风格 */
+//       /* ---- 合法/非法 HTTP-date（RFC1123风格） ---- */
+//       case 10: set_val(h, "Sat, 13 Nov 2010 23:29:00 GMT"); break;      /* 合法 */
+//       case 11: set_val(h, "Mon, 01 Jan 2035 00:00:00 GMT"); break;      /* 合法未来 */
+//       case 12: set_val(h, "Fak, 32 Foo 2010 99:99:99 GMT"); break;      /* 伪日期 */
+//       case 13: set_val(h, "Sat, 13 Nov 2010 23:29:00 UTC"); break;      /* 非 GMT 时区 */
+//       /* ---- 其他极端 ---- */
+//       case 14: { char tmp[SIP_TEXT_LEN]; sfill(tmp, sizeof tmp, 'A', sizeof tmp-1); set_val(h, tmp); } break; /* 超长 */
+//       default: set_val(h, "3600\r\nVia: SIP/2.0/UDP evil"); break;      /* 头注入 */
+//     }
+// }
 static void mutate_one_expires(sip_expires_hdr_t *h, unsigned *rs) {
-    switch (rnd_pick(rs, 16)) {
+    /* 只从语法合法的算子中选：0,1,2,3,5,6,10,11 */
+    static const unsigned legal_ops[] = {0, 1, 2, 3, 5, 6, 10, 11};
+    unsigned op = legal_ops[
+        rnd_pick(rs, (unsigned)(sizeof(legal_ops)/sizeof(legal_ops[0])))
+    ];
+
+    switch (op) {
       /* ---- 合法 delta-seconds ---- */
       case 0:  set_val(h, "0"); break;
       case 1:  set_val(h, "1"); break;
       case 2:  set_val(h, "60"); break;
       case 3:  set_val(h, "3600"); break;
-      /* ---- 边界/非法数字 ---- */
-      case 4:  set_val(h, "-1"); break;                 /* 负数 */
-      case 5:  set_val(h, "4294967295"); break;         /* 2^32-1 边界 */
-      case 6:  set_val(h, "9999999999"); break;         /* 极大值 */
-      case 7:  set_val(h, "  300 \t"); break;           /* 前后空白 */
-      /* ---- 格式错数字 ---- */
-      case 8:  set_val(h, "12.34"); break;              /* 小数 */
-      case 9:  set_val(h, "0x10"); break;               /* 十六进制风格 */
-      /* ---- 合法/非法 HTTP-date（RFC1123风格） ---- */
-      case 10: set_val(h, "Sat, 13 Nov 2010 23:29:00 GMT"); break;      /* 合法 */
-      case 11: set_val(h, "Mon, 01 Jan 2035 00:00:00 GMT"); break;      /* 合法未来 */
-      case 12: set_val(h, "Fak, 32 Foo 2010 99:99:99 GMT"); break;      /* 伪日期 */
-      case 13: set_val(h, "Sat, 13 Nov 2010 23:29:00 UTC"); break;      /* 非 GMT 时区 */
-      /* ---- 其他极端 ---- */
-      case 14: { char tmp[SIP_TEXT_LEN]; sfill(tmp, sizeof tmp, 'A', sizeof tmp-1); set_val(h, tmp); } break; /* 超长 */
-      default: set_val(h, "3600\r\nVia: SIP/2.0/UDP evil"); break;      /* 头注入 */
+
+      /* ---- 纯数字大值（语法合法） ---- */
+      case 5:  set_val(h, "4294967295"); break;
+      case 6:  set_val(h, "9999999999"); break;
+
+      /* ---- 合法 HTTP-date（RFC1123 + GMT） ---- */
+      case 10: set_val(h, "Sat, 13 Nov 2010 23:29:00 GMT"); break;
+      case 11: set_val(h, "Mon, 01 Jan 2035 00:00:00 GMT"); break;
+
+      default: set_val(h, "3600"); break; /* 理论不会到这 */
     }
 }
 
@@ -881,9 +996,8 @@ void mutate_expires_values(sip_packet_t *pkts, size_t n, unsigned seed){
     for (size_t i=0;i<n;i++){
         sip_expires_hdr_t *h = ensure_expires_for_pkt(&pkts[i]);
         if (!h) continue;                /* 只处理 INVITE/REGISTER */
-        /* 对单包做 1~2 次随机变异，叠加出更复杂场景 */
-        int times = 1 + (int)rnd_pick(&rs, 2);
-        for (int t=0; t<times; ++t) mutate_one_expires(h, &rs);
+
+        mutate_one_expires(h, &rs);
     }
 }
 
@@ -1008,9 +1122,50 @@ static void op_empty_uri(sip_from_hdr_t *h){                 /* 非法：空 URI
     scpy(h->params, sizeof h->params, ";tag=empty");
 }
 
+// /* 根据随机选择应用一个算子；并随机生成 tag 值以增加多样性 */
+// static void mutate_one_from(sip_from_hdr_t *h, unsigned *rs){
+//     if (!h) return;
+//     /* 随机给 tag 值换一个 token（对带 tag 的场景都能生效） */
+//     if (h->params[0]){
+//         char newtag[32]; gen_token(newtag, sizeof newtag, rs, 3, 12);
+//         /* 简单替换常见形式 ;tag=xxxx （找第一个出现）*/
+//         char *pos = strstr(h->params, ";tag=");
+//         if (pos){
+//             pos += 5;
+//             size_t remain = (size_t)((h->params + sizeof h->params - 1) - pos);
+//             scpy(pos, remain, newtag);
+//         }
+//     }
+
+//     switch (rnd_pick(rs, 17)){
+//         case 0:  op_canonical_min(h); break;
+//         case 1:  op_name_addr_with_quote(h); break;
+//         case 2:  op_remove_tag_param(h); break;
+//         case 3:  op_empty_tag(h); break;
+//         case 4:  op_dup_tag(h); break;
+//         case 5:  op_long_tag(h); break;
+//         case 6:  op_ipv6_host(h); break;
+//         case 7:  op_scheme_sips(h); break;
+//         case 8:  op_scheme_tel(h); break;
+//         case 9:  op_bad_scheme(h); break;
+//         case 10: op_uri_with_headers(h); break;
+//         case 11: op_weird_params_on_from(h); break;
+//         case 12: op_inject_in_params(h); break;
+//         case 13: op_inject_in_display(h); break;
+//         case 14: op_whitespace_variants(h); break;
+//         case 15: op_empty_uri(h); break;
+//         default: { /* 超长 display */
+//             sfill(h->display, sizeof h->display, 'D', sizeof h->display-1);
+//             h->sp_opt = ' '; h->lt='<'; h->gt='>';
+//             scpy(h->uri, sizeof h->uri, "sip:alice@example.com");
+//             scpy(h->params, sizeof h->params, ";tag=DD");
+//         } break;
+//     }
+// }
 /* 根据随机选择应用一个算子；并随机生成 tag 值以增加多样性 */
 static void mutate_one_from(sip_from_hdr_t *h, unsigned *rs){
     if (!h) return;
+
     /* 随机给 tag 值换一个 token（对带 tag 的场景都能生效） */
     if (h->params[0]){
         char newtag[32]; gen_token(newtag, sizeof newtag, rs, 3, 12);
@@ -1023,24 +1178,30 @@ static void mutate_one_from(sip_from_hdr_t *h, unsigned *rs){
         }
     }
 
-    switch (rnd_pick(rs, 17)){
+    /* 只从语法合法的算子中选 */
+    static const unsigned legal_ops[] = {0, 1, 2, 4, 5, 6, 7, 8, 10, 16};
+    unsigned op = legal_ops[
+        rnd_pick(rs, (unsigned)(sizeof(legal_ops)/sizeof(legal_ops[0])))
+    ];
+
+    switch (op){
         case 0:  op_canonical_min(h); break;
         case 1:  op_name_addr_with_quote(h); break;
         case 2:  op_remove_tag_param(h); break;
-        case 3:  op_empty_tag(h); break;
+        case 3:  op_empty_tag(h); break;              /* 不会被选到 */
         case 4:  op_dup_tag(h); break;
         case 5:  op_long_tag(h); break;
         case 6:  op_ipv6_host(h); break;
         case 7:  op_scheme_sips(h); break;
         case 8:  op_scheme_tel(h); break;
-        case 9:  op_bad_scheme(h); break;
+        case 9:  op_bad_scheme(h); break;            /* 不会被选到 */
         case 10: op_uri_with_headers(h); break;
-        case 11: op_weird_params_on_from(h); break;
-        case 12: op_inject_in_params(h); break;
-        case 13: op_inject_in_display(h); break;
-        case 14: op_whitespace_variants(h); break;
-        case 15: op_empty_uri(h); break;
-        default: { /* 超长 display */
+        case 11: op_weird_params_on_from(h); break;  /* 不会被选到 */
+        case 12: op_inject_in_params(h); break;      /* 不会被选到 */
+        case 13: op_inject_in_display(h); break;     /* 不会被选到 */
+        case 14: op_whitespace_variants(h); break;   /* 不会被选到 */
+        case 15: op_empty_uri(h); break;             /* 不会被选到 */
+        default: { /* 超长 display（语法合法） */
             sfill(h->display, sizeof h->display, 'D', sizeof h->display-1);
             h->sp_opt = ' '; h->lt='<'; h->gt='>';
             scpy(h->uri, sizeof h->uri, "sip:alice@example.com");
@@ -1056,8 +1217,8 @@ void mutate_from_headers(sip_packet_t *pkts, size_t n, unsigned seed){
         sip_from_hdr_t *h = get_from_ptr(&pkts[i]);
         if (!h) continue;
         ensure_from_present(h);
-        int times = 1 + (int)rnd_pick(&rs, 3);  /* 每个包 1~3 次叠加变异 */
-        for (int t=0;t<times;t++) mutate_one_from(h, &rs);
+
+        mutate_one_from(h, &rs);
 
         /* 最后兜底：如果没有 tag，就给一个（虽然某些算子故意去掉了它） */
         if (!strstr(h->params, ";tag=")){
@@ -1261,16 +1422,48 @@ static void rr_op_multi_in_one_line(sip_record_route_hdr_t *h){ scpy(h->params,s
 static void rr_op_randomize_case_lr(sip_record_route_hdr_t *h){ scpy(h->params,sizeof h->params,";LR;Lr;lR"); }               /* 大小写混淆 */
 static void rr_op_overlong_uri(sip_record_route_hdr_t *h){ sfill(h->uri,sizeof h->uri,'U',sizeof h->uri-1); }                 /* 超长 */
 
+// static void mutate_one_rr_line(sip_record_route_hdr_t *h, unsigned *rs){
+//     if (!h || !h->name[0]) return;
+//     switch (rnd_pick(rs, 18)){
+//         case 0:  rr_op_toggle_angle(h); break;
+//         case 1:  rr_op_remove_gt_only(h); break;
+//         case 2:  rr_op_remove_lt_only(h); break;
+//         case 3:  rr_op_empty_uri(h); break;
+//         case 4:  rr_op_set_tel_uri(h); break;
+//         case 5:  rr_op_set_sips(h); break;
+//         case 6:  rr_op_set_bad_scheme(h); break;
+//         case 7:  rr_op_ipv6(h); break;
+//         case 8:  rr_op_uri_params_transport(h); break;
+//         case 9:  rr_op_add_lr(h); break;
+//         case 10: rr_op_del_lr(h); break;
+//         case 11: rr_op_lr_with_value(h); break;
+//         case 12: rr_op_dup_lr(h); break;
+//         case 13: rr_op_long_params(h); break;
+//         case 14: rr_op_inject_header(h); break;
+//         case 15: rr_op_multi_in_one_line(h); break;
+//         case 16: rr_op_randomize_case_lr(h); break;
+//         default: rr_op_overlong_uri(h); break;
+//     }
+// }
 static void mutate_one_rr_line(sip_record_route_hdr_t *h, unsigned *rs){
     if (!h || !h->name[0]) return;
-    switch (rnd_pick(rs, 18)){
+
+    /* 只从语法合法的算子中选 */
+    static const unsigned legal_ops[] = {
+        0, 4, 5, 7, 8, 9, 10, 11, 12, 13, 15, 16, 17
+    };
+    unsigned op = legal_ops[
+        rnd_pick(rs, (unsigned)(sizeof(legal_ops)/sizeof(legal_ops[0])))
+    ];
+
+    switch (op){
         case 0:  rr_op_toggle_angle(h); break;
-        case 1:  rr_op_remove_gt_only(h); break;
-        case 2:  rr_op_remove_lt_only(h); break;
-        case 3:  rr_op_empty_uri(h); break;
+        case 1:  rr_op_remove_gt_only(h); break;     /* 不会被选到 */
+        case 2:  rr_op_remove_lt_only(h); break;     /* 不会被选到 */
+        case 3:  rr_op_empty_uri(h); break;          /* 不会被选到 */
         case 4:  rr_op_set_tel_uri(h); break;
         case 5:  rr_op_set_sips(h); break;
-        case 6:  rr_op_set_bad_scheme(h); break;
+        case 6:  rr_op_set_bad_scheme(h); break;     /* 不会被选到 */
         case 7:  rr_op_ipv6(h); break;
         case 8:  rr_op_uri_params_transport(h); break;
         case 9:  rr_op_add_lr(h); break;
@@ -1278,19 +1471,19 @@ static void mutate_one_rr_line(sip_record_route_hdr_t *h, unsigned *rs){
         case 11: rr_op_lr_with_value(h); break;
         case 12: rr_op_dup_lr(h); break;
         case 13: rr_op_long_params(h); break;
-        case 14: rr_op_inject_header(h); break;
+        case 14: rr_op_inject_header(h); break;      /* 不会被选到 */
         case 15: rr_op_multi_in_one_line(h); break;
         case 16: rr_op_randomize_case_lr(h); break;
         default: rr_op_overlong_uri(h); break;
     }
 }
 
-/* 对一个包：随机新增/删除/重复 + 对每条 RR 做 1~2 次细粒度变异 */
+
 static void mutate_rr_for_pkt(sip_packet_t *p, unsigned *rs){
     rr_array_t r = get_rr_array(p);
     if (!r.arr || !r.count) return;
 
-    /* 20% 删除全部，30% 添加一个，20% 重复填满，其余保持 */
+
     unsigned dice = rnd_pick(rs, 10);
     if (dice < 2){
         delete_record_route_for_pkt(p);
@@ -1299,16 +1492,12 @@ static void mutate_rr_for_pkt(sip_packet_t *p, unsigned *rs){
     } else if (dice < 7){
         repeat_record_route_for_pkt(p);
     } else {
-        if (*r.count==0 && rnd_pick(rs,2)==0){
-            add_record_route_for_pkt(p, "sip:first.proxy.example.com", ";lr", rnd_pick(rs,2));
+        for (size_t k=0;k<*r.count;k++){
+            mutate_one_rr_line(&r.arr[k], rs);
         }
     }
 
-    /* 针对现存条目做细粒度内容变异 */
-    size_t times = (*r.count==0)?0:(size_t)(1 + rnd_pick(rs,2)); /* 每条 1~2 次 */
-    for (size_t k=0;k<*r.count;k++){
-        for (size_t t=0;t<times;t++) mutate_one_rr_line(&r.arr[k], rs);
-    }
+
 }
 
 /* --------- 对外：遍历数组，按包类型执行 RR 变异 --------- */
