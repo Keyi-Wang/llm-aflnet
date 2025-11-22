@@ -502,6 +502,7 @@ typedef struct {
      (mark “absent” by setting hdr.name[0] = '\0') */
   sip_accept_language_hdr_t     accept_language;
   sip_authorization_hdr_t       authorization;
+  sip_content_length_hdr_t      content_length;
   sip_date_hdr_t                date;
   sip_encryption_hdr_t          encryption;
   sip_hide_hdr_t                hide;
@@ -561,6 +562,7 @@ typedef struct {
      Mark an absent optional header by setting hdr.name[0] = '\0'. */
   sip_accept_language_hdr_t     accept_language;
   sip_authorization_hdr_t       authorization;
+  sip_content_length_hdr_t      content_length;
   sip_date_hdr_t                date;
   sip_encryption_hdr_t          encryption;
   sip_hide_hdr_t                hide;

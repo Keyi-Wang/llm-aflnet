@@ -4552,8 +4552,16 @@ static char  state_path[512];                 // 累计状态文件
 static char  state_tmp_path[512];             // 临时文件用于原子覆盖
 
 static void stats_load_state(void) {
-    const char *state = getenv("LIVE555_FUZZ_STATE");
-    if (!state || !*state) state = "/tmp/live555_state.txt";
+    const char *state = getenv("FUZZ_STATE");
+    if (!state || !*state) {
+      if(strcmp(protocol_name, "MQTT") == 0) {
+        state = "/tmp/mosq_fuzz_state.txt";
+      } else if(strcmp(protocol_name, "RTSP") == 0) {
+        state = "/tmp/live555_state.txt";
+      } else if(strcmp(protocol_name, "FTP") == 0) {
+        state = "/tmp/ftp_state.txt";
+      } 
+    }
     snprintf(state_path, sizeof(state_path), "%s", state);
     FILE *fp = fopen(state_path, "r");
     if (!fp) return; // 首次运行，没有就算了
