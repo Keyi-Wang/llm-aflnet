@@ -1,0 +1,6 @@
+USER test
+PASS test
+MKD spaced dir
+CWD spaced dir
+PWD
+QUIT

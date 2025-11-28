@@ -1,0 +1,5 @@
+USER test
+PASS test
+CWD ././
+PWD
+QUIT

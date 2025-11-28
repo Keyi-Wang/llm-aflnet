@@ -1,0 +1,5 @@
+USER test
+PASS test
+RNFR oldname.txt
+RNTO newname.txt
+QUIT

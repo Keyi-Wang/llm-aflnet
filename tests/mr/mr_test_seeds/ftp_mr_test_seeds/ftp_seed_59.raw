@@ -1,0 +1,4 @@
+USER anonymous
+PASS anonymous@
+RETR /dev/null
+QUIT

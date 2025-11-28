@@ -1,0 +1,6 @@
+USER anonymous
+PASS anonymous@
+TYPE I
+PASV
+STOR ../outside.bin
+QUIT

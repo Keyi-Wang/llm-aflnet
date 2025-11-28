@@ -1,0 +1,4 @@
+USER anonymous
+PASS anonymous@
+SITE CHMOD 000 secret.txt
+QUIT

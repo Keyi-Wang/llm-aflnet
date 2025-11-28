@@ -30,16 +30,6 @@ static void set_span_trim(char dst[], size_t cap, const char *b, const char *e) 
     dst[n] = '\0';
 }
 
-/* 不裁剪，用于保留参数原貌时可选 */
-static void set_span_raw(char dst[], size_t cap, const char *b, const char *e) {
-    if (!dst || cap == 0) return;
-    if (!b || !e || e < b) { dst[0] = '\0'; return; }
-    size_t n = (size_t)(e - b);
-    if (n >= cap) n = cap - 1;
-    if (n > 0) memcpy(dst, b, n);
-    dst[n] = '\0';
-}
-
 /* 大小写不敏感命令名匹配：s[0..n) vs "NAME" */
 static int cmd_ieq(const char *s, size_t n, const char *NAME) {
     for (size_t i = 0; i < n; ++i) {
@@ -390,277 +380,277 @@ size_t parse_ftp_msg(const uint8_t *buf, size_t buf_len,
 
 
 
-static void fprint_escaped(FILE *out, const char *s) {
-    if (!s) return;
-    for (const unsigned char *p = (const unsigned char*)s; *p; ++p) {
-        unsigned char c = *p;
-        switch (c) {
-            case '\r': fputs("\\r", out); break;
-            case '\n': fputs("\\n", out); break;
-            case '\t': fputs("\\t", out); break;
-            case '\\': fputs("\\\\", out); break;
-            case '\"': fputs("\\\"", out); break;
-            default:
-                if (c < 0x20 || c >= 0x7f) {
-                    fprintf(out, "\\x%02X", (unsigned)c);
-                } else {
-                    fputc(c, out);
-                }
-        }
-    }
-}
+// static void fprint_escaped(FILE *out, const char *s) {
+//     if (!s) return;
+//     for (const unsigned char *p = (const unsigned char*)s; *p; ++p) {
+//         unsigned char c = *p;
+//         switch (c) {
+//             case '\r': fputs("\\r", out); break;
+//             case '\n': fputs("\\n", out); break;
+//             case '\t': fputs("\\t", out); break;
+//             case '\\': fputs("\\\\", out); break;
+//             case '\"': fputs("\\\"", out); break;
+//             default:
+//                 if (c < 0x20 || c >= 0x7f) {
+//                     fprintf(out, "\\x%02X", (unsigned)c);
+//                 } else {
+//                     fputc(c, out);
+//                 }
+//         }
+//     }
+// }
 
-static const char* cmd_to_str(ftp_command_type_t t) {
-    /* 顺序需与 ftp_packets.h 中的枚举一致 */
-    static const char* names[] = {
-        "USER","PASS","ACCT","CWD","CDUP","SMNT","REIN","QUIT",
-        "PORT","PASV","TYPE","STRU","MODE",
-        "RETR","STOR","STOU","APPE","ALLO","REST","RNFR","RNTO",
-        "ABOR","DELE","RMD","MKD","PWD",
-        "LIST","NLST","SITE","SYST","STAT","HELP","NOOP"
-    };
-    size_t n = sizeof(names)/sizeof(names[0]);
-    return ((unsigned)t < n) ? names[t] : "UNKNOWN";
-}
+// static const char* cmd_to_str(ftp_command_type_t t) {
+//     /* 顺序需与 ftp_packets.h 中的枚举一致 */
+//     static const char* names[] = {
+//         "USER","PASS","ACCT","CWD","CDUP","SMNT","REIN","QUIT",
+//         "PORT","PASV","TYPE","STRU","MODE",
+//         "RETR","STOR","STOU","APPE","ALLO","REST","RNFR","RNTO",
+//         "ABOR","DELE","RMD","MKD","PWD",
+//         "LIST","NLST","SITE","SYST","STAT","HELP","NOOP"
+//     };
+//     size_t n = sizeof(names)/sizeof(names[0]);
+//     return ((unsigned)t < n) ? names[t] : "UNKNOWN";
+// }
 
-void print_ftp_packets(const ftp_packet_t *packets, size_t pkt_num) {
-    if (!packets) return;
+// void print_ftp_packets(const ftp_packet_t *packets, size_t pkt_num) {
+//     if (!packets) return;
 
-    for (size_t i = 0; i < pkt_num; ++i) {
-        const ftp_packet_t *pk = &packets[i];
-        printf("[%04zu] CMD=%s\n", i, cmd_to_str(pk->command_type));
-        printf("        line: \"");
+//     for (size_t i = 0; i < pkt_num; ++i) {
+//         const ftp_packet_t *pk = &packets[i];
+//         printf("[%04zu] CMD=%s\n", i, cmd_to_str(pk->command_type));
+//         printf("        line: \"");
 
-        switch (pk->command_type) {
-            case FTP_USER:
-                fprint_escaped(stdout, pk->packet.user.command);
-                fprint_escaped(stdout, pk->packet.user.space);
-                fprint_escaped(stdout, pk->packet.user.username);
-                fprint_escaped(stdout, pk->packet.user.crlf);
-                break;
+//         switch (pk->command_type) {
+//             case FTP_USER:
+//                 fprint_escaped(stdout, pk->packet.user.command);
+//                 fprint_escaped(stdout, pk->packet.user.space);
+//                 fprint_escaped(stdout, pk->packet.user.username);
+//                 fprint_escaped(stdout, pk->packet.user.crlf);
+//                 break;
 
-            case FTP_PASS:
-                fprint_escaped(stdout, pk->packet.pass.command);
-                fprint_escaped(stdout, pk->packet.pass.space);
-                fprint_escaped(stdout, pk->packet.pass.password);
-                fprint_escaped(stdout, pk->packet.pass.crlf);
-                break;
+//             case FTP_PASS:
+//                 fprint_escaped(stdout, pk->packet.pass.command);
+//                 fprint_escaped(stdout, pk->packet.pass.space);
+//                 fprint_escaped(stdout, pk->packet.pass.password);
+//                 fprint_escaped(stdout, pk->packet.pass.crlf);
+//                 break;
 
-            case FTP_ACCT:
-                fprint_escaped(stdout, pk->packet.acct.command);
-                fprint_escaped(stdout, pk->packet.acct.space);
-                fprint_escaped(stdout, pk->packet.acct.account_info);
-                fprint_escaped(stdout, pk->packet.acct.crlf);
-                break;
+//             case FTP_ACCT:
+//                 fprint_escaped(stdout, pk->packet.acct.command);
+//                 fprint_escaped(stdout, pk->packet.acct.space);
+//                 fprint_escaped(stdout, pk->packet.acct.account_info);
+//                 fprint_escaped(stdout, pk->packet.acct.crlf);
+//                 break;
 
-            case FTP_CWD:
-                fprint_escaped(stdout, pk->packet.cwd.command);
-                fprint_escaped(stdout, pk->packet.cwd.space);
-                fprint_escaped(stdout, pk->packet.cwd.pathname);
-                fprint_escaped(stdout, pk->packet.cwd.crlf);
-                break;
+//             case FTP_CWD:
+//                 fprint_escaped(stdout, pk->packet.cwd.command);
+//                 fprint_escaped(stdout, pk->packet.cwd.space);
+//                 fprint_escaped(stdout, pk->packet.cwd.pathname);
+//                 fprint_escaped(stdout, pk->packet.cwd.crlf);
+//                 break;
 
-            case FTP_CDUP:
-                fprint_escaped(stdout, pk->packet.cdup.command);
-                fprint_escaped(stdout, pk->packet.cdup.crlf);
-                break;
+//             case FTP_CDUP:
+//                 fprint_escaped(stdout, pk->packet.cdup.command);
+//                 fprint_escaped(stdout, pk->packet.cdup.crlf);
+//                 break;
 
-            case FTP_SMNT:
-                fprint_escaped(stdout, pk->packet.smnt.command);
-                fprint_escaped(stdout, pk->packet.smnt.space);
-                fprint_escaped(stdout, pk->packet.smnt.pathname);
-                fprint_escaped(stdout, pk->packet.smnt.crlf);
-                break;
+//             case FTP_SMNT:
+//                 fprint_escaped(stdout, pk->packet.smnt.command);
+//                 fprint_escaped(stdout, pk->packet.smnt.space);
+//                 fprint_escaped(stdout, pk->packet.smnt.pathname);
+//                 fprint_escaped(stdout, pk->packet.smnt.crlf);
+//                 break;
 
-            case FTP_REIN:
-                fprint_escaped(stdout, pk->packet.rein.command);
-                fprint_escaped(stdout, pk->packet.rein.crlf);
-                break;
+//             case FTP_REIN:
+//                 fprint_escaped(stdout, pk->packet.rein.command);
+//                 fprint_escaped(stdout, pk->packet.rein.crlf);
+//                 break;
 
-            case FTP_QUIT:
-                fprint_escaped(stdout, pk->packet.quit.command);
-                fprint_escaped(stdout, pk->packet.quit.crlf);
-                break;
+//             case FTP_QUIT:
+//                 fprint_escaped(stdout, pk->packet.quit.command);
+//                 fprint_escaped(stdout, pk->packet.quit.crlf);
+//                 break;
 
-            case FTP_PORT:
-                fprint_escaped(stdout, pk->packet.port.command);
-                fprint_escaped(stdout, pk->packet.port.space);
-                fprint_escaped(stdout, pk->packet.port.host_port_str);
-                fprint_escaped(stdout, pk->packet.port.crlf);
-                break;
+//             case FTP_PORT:
+//                 fprint_escaped(stdout, pk->packet.port.command);
+//                 fprint_escaped(stdout, pk->packet.port.space);
+//                 fprint_escaped(stdout, pk->packet.port.host_port_str);
+//                 fprint_escaped(stdout, pk->packet.port.crlf);
+//                 break;
 
-            case FTP_PASV:
-                fprint_escaped(stdout, pk->packet.pasv.command);
-                fprint_escaped(stdout, pk->packet.pasv.crlf);
-                break;
+//             case FTP_PASV:
+//                 fprint_escaped(stdout, pk->packet.pasv.command);
+//                 fprint_escaped(stdout, pk->packet.pasv.crlf);
+//                 break;
 
-            case FTP_TYPE:
-                fprint_escaped(stdout, pk->packet.type.command);
-                fprint_escaped(stdout, pk->packet.type.space1);
-                fprint_escaped(stdout, pk->packet.type.type_code);
-                fprint_escaped(stdout, pk->packet.type.space2);
-                fprint_escaped(stdout, pk->packet.type.format_control);
-                fprint_escaped(stdout, pk->packet.type.crlf);
-                break;
+//             case FTP_TYPE:
+//                 fprint_escaped(stdout, pk->packet.type.command);
+//                 fprint_escaped(stdout, pk->packet.type.space1);
+//                 fprint_escaped(stdout, pk->packet.type.type_code);
+//                 fprint_escaped(stdout, pk->packet.type.space2);
+//                 fprint_escaped(stdout, pk->packet.type.format_control);
+//                 fprint_escaped(stdout, pk->packet.type.crlf);
+//                 break;
 
-            case FTP_STRU:
-                fprint_escaped(stdout, pk->packet.stru.command);
-                fprint_escaped(stdout, pk->packet.stru.space);
-                fprint_escaped(stdout, pk->packet.stru.structure_code);
-                fprint_escaped(stdout, pk->packet.stru.crlf);
-                break;
+//             case FTP_STRU:
+//                 fprint_escaped(stdout, pk->packet.stru.command);
+//                 fprint_escaped(stdout, pk->packet.stru.space);
+//                 fprint_escaped(stdout, pk->packet.stru.structure_code);
+//                 fprint_escaped(stdout, pk->packet.stru.crlf);
+//                 break;
 
-            case FTP_MODE:
-                fprint_escaped(stdout, pk->packet.mode.command);
-                fprint_escaped(stdout, pk->packet.mode.space);
-                fprint_escaped(stdout, pk->packet.mode.mode_code);
-                fprint_escaped(stdout, pk->packet.mode.crlf);
-                break;
+//             case FTP_MODE:
+//                 fprint_escaped(stdout, pk->packet.mode.command);
+//                 fprint_escaped(stdout, pk->packet.mode.space);
+//                 fprint_escaped(stdout, pk->packet.mode.mode_code);
+//                 fprint_escaped(stdout, pk->packet.mode.crlf);
+//                 break;
 
-            case FTP_RETR:
-                fprint_escaped(stdout, pk->packet.retr.command);
-                fprint_escaped(stdout, pk->packet.retr.space);
-                fprint_escaped(stdout, pk->packet.retr.pathname);
-                fprint_escaped(stdout, pk->packet.retr.crlf);
-                break;
+//             case FTP_RETR:
+//                 fprint_escaped(stdout, pk->packet.retr.command);
+//                 fprint_escaped(stdout, pk->packet.retr.space);
+//                 fprint_escaped(stdout, pk->packet.retr.pathname);
+//                 fprint_escaped(stdout, pk->packet.retr.crlf);
+//                 break;
 
-            case FTP_STOR:
-                fprint_escaped(stdout, pk->packet.stor.command);
-                fprint_escaped(stdout, pk->packet.stor.space);
-                fprint_escaped(stdout, pk->packet.stor.pathname);
-                fprint_escaped(stdout, pk->packet.stor.crlf);
-                break;
+//             case FTP_STOR:
+//                 fprint_escaped(stdout, pk->packet.stor.command);
+//                 fprint_escaped(stdout, pk->packet.stor.space);
+//                 fprint_escaped(stdout, pk->packet.stor.pathname);
+//                 fprint_escaped(stdout, pk->packet.stor.crlf);
+//                 break;
 
-            case FTP_STOU:
-                fprint_escaped(stdout, pk->packet.stou.command);
-                fprint_escaped(stdout, pk->packet.stou.space);
-                fprint_escaped(stdout, pk->packet.stou.pathname);
-                fprint_escaped(stdout, pk->packet.stou.crlf);
-                break;
+//             case FTP_STOU:
+//                 fprint_escaped(stdout, pk->packet.stou.command);
+//                 fprint_escaped(stdout, pk->packet.stou.space);
+//                 fprint_escaped(stdout, pk->packet.stou.pathname);
+//                 fprint_escaped(stdout, pk->packet.stou.crlf);
+//                 break;
 
-            case FTP_APPE:
-                fprint_escaped(stdout, pk->packet.appe.command);
-                fprint_escaped(stdout, pk->packet.appe.space);
-                fprint_escaped(stdout, pk->packet.appe.pathname);
-                fprint_escaped(stdout, pk->packet.appe.crlf);
-                break;
+//             case FTP_APPE:
+//                 fprint_escaped(stdout, pk->packet.appe.command);
+//                 fprint_escaped(stdout, pk->packet.appe.space);
+//                 fprint_escaped(stdout, pk->packet.appe.pathname);
+//                 fprint_escaped(stdout, pk->packet.appe.crlf);
+//                 break;
 
-            case FTP_ALLO:
-                fprint_escaped(stdout, pk->packet.allo.command);
-                fprint_escaped(stdout, pk->packet.allo.space1);
-                fprint_escaped(stdout, pk->packet.allo.byte_count);
-                fprint_escaped(stdout, pk->packet.allo.space2);
-                fprint_escaped(stdout, pk->packet.allo.record_format); /* 若为空则不会输出额外内容 */
-                fprint_escaped(stdout, pk->packet.allo.crlf);
-                break;
+//             case FTP_ALLO:
+//                 fprint_escaped(stdout, pk->packet.allo.command);
+//                 fprint_escaped(stdout, pk->packet.allo.space1);
+//                 fprint_escaped(stdout, pk->packet.allo.byte_count);
+//                 fprint_escaped(stdout, pk->packet.allo.space2);
+//                 fprint_escaped(stdout, pk->packet.allo.record_format); /* 若为空则不会输出额外内容 */
+//                 fprint_escaped(stdout, pk->packet.allo.crlf);
+//                 break;
 
-            case FTP_REST:
-                fprint_escaped(stdout, pk->packet.rest.command);
-                fprint_escaped(stdout, pk->packet.rest.space);
-                fprint_escaped(stdout, pk->packet.rest.marker);
-                fprint_escaped(stdout, pk->packet.rest.crlf);
-                break;
+//             case FTP_REST:
+//                 fprint_escaped(stdout, pk->packet.rest.command);
+//                 fprint_escaped(stdout, pk->packet.rest.space);
+//                 fprint_escaped(stdout, pk->packet.rest.marker);
+//                 fprint_escaped(stdout, pk->packet.rest.crlf);
+//                 break;
 
-            case FTP_RNFR:
-                fprint_escaped(stdout, pk->packet.rnfr.command);
-                fprint_escaped(stdout, pk->packet.rnfr.space);
-                fprint_escaped(stdout, pk->packet.rnfr.pathname);
-                fprint_escaped(stdout, pk->packet.rnfr.crlf);
-                break;
+//             case FTP_RNFR:
+//                 fprint_escaped(stdout, pk->packet.rnfr.command);
+//                 fprint_escaped(stdout, pk->packet.rnfr.space);
+//                 fprint_escaped(stdout, pk->packet.rnfr.pathname);
+//                 fprint_escaped(stdout, pk->packet.rnfr.crlf);
+//                 break;
 
-            case FTP_RNTO:
-                fprint_escaped(stdout, pk->packet.rnto.command);
-                fprint_escaped(stdout, pk->packet.rnto.space);
-                fprint_escaped(stdout, pk->packet.rnto.pathname);
-                fprint_escaped(stdout, pk->packet.rnto.crlf);
-                break;
+//             case FTP_RNTO:
+//                 fprint_escaped(stdout, pk->packet.rnto.command);
+//                 fprint_escaped(stdout, pk->packet.rnto.space);
+//                 fprint_escaped(stdout, pk->packet.rnto.pathname);
+//                 fprint_escaped(stdout, pk->packet.rnto.crlf);
+//                 break;
 
-            case FTP_ABOR:
-                fprint_escaped(stdout, pk->packet.abor.command);
-                fprint_escaped(stdout, pk->packet.abor.crlf);
-                break;
+//             case FTP_ABOR:
+//                 fprint_escaped(stdout, pk->packet.abor.command);
+//                 fprint_escaped(stdout, pk->packet.abor.crlf);
+//                 break;
 
-            case FTP_DELE:
-                fprint_escaped(stdout, pk->packet.dele.command);
-                fprint_escaped(stdout, pk->packet.dele.space);
-                fprint_escaped(stdout, pk->packet.dele.pathname);
-                fprint_escaped(stdout, pk->packet.dele.crlf);
-                break;
+//             case FTP_DELE:
+//                 fprint_escaped(stdout, pk->packet.dele.command);
+//                 fprint_escaped(stdout, pk->packet.dele.space);
+//                 fprint_escaped(stdout, pk->packet.dele.pathname);
+//                 fprint_escaped(stdout, pk->packet.dele.crlf);
+//                 break;
 
-            case FTP_RMD:
-                fprint_escaped(stdout, pk->packet.rmd.command);
-                fprint_escaped(stdout, pk->packet.rmd.space);
-                fprint_escaped(stdout, pk->packet.rmd.pathname);
-                fprint_escaped(stdout, pk->packet.rmd.crlf);
-                break;
+//             case FTP_RMD:
+//                 fprint_escaped(stdout, pk->packet.rmd.command);
+//                 fprint_escaped(stdout, pk->packet.rmd.space);
+//                 fprint_escaped(stdout, pk->packet.rmd.pathname);
+//                 fprint_escaped(stdout, pk->packet.rmd.crlf);
+//                 break;
 
-            case FTP_MKD:
-                fprint_escaped(stdout, pk->packet.mkd.command);
-                fprint_escaped(stdout, pk->packet.mkd.space);
-                fprint_escaped(stdout, pk->packet.mkd.pathname);
-                fprint_escaped(stdout, pk->packet.mkd.crlf);
-                break;
+//             case FTP_MKD:
+//                 fprint_escaped(stdout, pk->packet.mkd.command);
+//                 fprint_escaped(stdout, pk->packet.mkd.space);
+//                 fprint_escaped(stdout, pk->packet.mkd.pathname);
+//                 fprint_escaped(stdout, pk->packet.mkd.crlf);
+//                 break;
 
-            case FTP_PWD:
-                fprint_escaped(stdout, pk->packet.pwd.command);
-                fprint_escaped(stdout, pk->packet.pwd.crlf);
-                break;
+//             case FTP_PWD:
+//                 fprint_escaped(stdout, pk->packet.pwd.command);
+//                 fprint_escaped(stdout, pk->packet.pwd.crlf);
+//                 break;
 
-            case FTP_LIST:
-                fprint_escaped(stdout, pk->packet.list.command);
-                fprint_escaped(stdout, pk->packet.list.space);
-                fprint_escaped(stdout, pk->packet.list.pathname);
-                fprint_escaped(stdout, pk->packet.list.crlf);
-                break;
+//             case FTP_LIST:
+//                 fprint_escaped(stdout, pk->packet.list.command);
+//                 fprint_escaped(stdout, pk->packet.list.space);
+//                 fprint_escaped(stdout, pk->packet.list.pathname);
+//                 fprint_escaped(stdout, pk->packet.list.crlf);
+//                 break;
 
-            case FTP_NLST:
-                fprint_escaped(stdout, pk->packet.nlst.command);
-                fprint_escaped(stdout, pk->packet.nlst.space);
-                fprint_escaped(stdout, pk->packet.nlst.pathname);
-                fprint_escaped(stdout, pk->packet.nlst.crlf);
-                break;
+//             case FTP_NLST:
+//                 fprint_escaped(stdout, pk->packet.nlst.command);
+//                 fprint_escaped(stdout, pk->packet.nlst.space);
+//                 fprint_escaped(stdout, pk->packet.nlst.pathname);
+//                 fprint_escaped(stdout, pk->packet.nlst.crlf);
+//                 break;
 
-            case FTP_SITE:
-                fprint_escaped(stdout, pk->packet.site.command);
-                fprint_escaped(stdout, pk->packet.site.space);
-                fprint_escaped(stdout, pk->packet.site.parameters);
-                fprint_escaped(stdout, pk->packet.site.crlf);
-                break;
+//             case FTP_SITE:
+//                 fprint_escaped(stdout, pk->packet.site.command);
+//                 fprint_escaped(stdout, pk->packet.site.space);
+//                 fprint_escaped(stdout, pk->packet.site.parameters);
+//                 fprint_escaped(stdout, pk->packet.site.crlf);
+//                 break;
 
-            case FTP_SYST:
-                fprint_escaped(stdout, pk->packet.syst.command);
-                fprint_escaped(stdout, pk->packet.syst.crlf);
-                break;
+//             case FTP_SYST:
+//                 fprint_escaped(stdout, pk->packet.syst.command);
+//                 fprint_escaped(stdout, pk->packet.syst.crlf);
+//                 break;
 
-            case FTP_STAT:
-                fprint_escaped(stdout, pk->packet.stat.command);
-                fprint_escaped(stdout, pk->packet.stat.space);
-                fprint_escaped(stdout, pk->packet.stat.pathname);
-                fprint_escaped(stdout, pk->packet.stat.crlf);
-                break;
+//             case FTP_STAT:
+//                 fprint_escaped(stdout, pk->packet.stat.command);
+//                 fprint_escaped(stdout, pk->packet.stat.space);
+//                 fprint_escaped(stdout, pk->packet.stat.pathname);
+//                 fprint_escaped(stdout, pk->packet.stat.crlf);
+//                 break;
 
-            case FTP_HELP:
-                fprint_escaped(stdout, pk->packet.help.command);
-                fprint_escaped(stdout, pk->packet.help.space);
-                fprint_escaped(stdout, pk->packet.help.argument);
-                fprint_escaped(stdout, pk->packet.help.crlf);
-                break;
+//             case FTP_HELP:
+//                 fprint_escaped(stdout, pk->packet.help.command);
+//                 fprint_escaped(stdout, pk->packet.help.space);
+//                 fprint_escaped(stdout, pk->packet.help.argument);
+//                 fprint_escaped(stdout, pk->packet.help.crlf);
+//                 break;
 
-            case FTP_NOOP:
-                fprint_escaped(stdout, pk->packet.noop.command);
-                fprint_escaped(stdout, pk->packet.noop.crlf);
-                break;
+//             case FTP_NOOP:
+//                 fprint_escaped(stdout, pk->packet.noop.command);
+//                 fprint_escaped(stdout, pk->packet.noop.crlf);
+//                 break;
 
-            default:
-                /* 尝试保守打印：若有 user 子结构就按 user 打，否则仅打印命令名 */
-                if (pk->packet.user.command[0]) {
-                    fprint_escaped(stdout, pk->packet.user.command);
-                    fprint_escaped(stdout, pk->packet.user.space);
-                    fprint_escaped(stdout, pk->packet.user.username);
-                    fprint_escaped(stdout, pk->packet.user.crlf);
-                }
-                break;
-        }
-        printf("\"\n");
-    }
-}
+//             default:
+//                 /* 尝试保守打印：若有 user 子结构就按 user 打，否则仅打印命令名 */
+//                 if (pk->packet.user.command[0]) {
+//                     fprint_escaped(stdout, pk->packet.user.command);
+//                     fprint_escaped(stdout, pk->packet.user.space);
+//                     fprint_escaped(stdout, pk->packet.user.username);
+//                     fprint_escaped(stdout, pk->packet.user.crlf);
+//                 }
+//                 break;
+//         }
+//         printf("\"\n");
+//     }
+// }

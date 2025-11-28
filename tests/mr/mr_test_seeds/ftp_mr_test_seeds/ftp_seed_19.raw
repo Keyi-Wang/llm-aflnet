@@ -1,0 +1,5 @@
+USER test
+PASS test
+PASV
+RETR dir/sub/file with spaces.txt
+QUIT

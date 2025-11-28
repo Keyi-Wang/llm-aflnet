@@ -1,0 +1,5 @@
+USER test
+PASS test
+MKD temp
+RMD temp
+QUIT

@@ -1,0 +1,5 @@
+USER test
+PASS test
+PORT 192,168,1,10,19,136
+RETR readme.txt
+QUIT

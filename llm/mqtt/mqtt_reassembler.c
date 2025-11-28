@@ -59,12 +59,14 @@ int reassemble_a_mqtt_msg(const mqtt_packet_t *pkt, u8 *output_buf, u32 *out_len
 
             if (con->payload.client_id)
                 payload_len += write_utf8_str(payload_buf + payload_len, con->payload.client_id);
-
+            uint8_t will_flag     = (con->variable_header.connect_flags >> 2) & 1;
             if (con->payload.will_property_len > 0 && con->payload.will_properties[0]) {
                 u32 len = con->payload.will_property_len;
                 payload_len += write_remaining_length(payload_buf + payload_len, len);
                 memcpy(payload_buf + payload_len, con->payload.will_properties, len);
                 payload_len += len;
+            } else if(con->payload.will_property_len == 0 && will_flag==1){
+                payload_len += write_remaining_length(payload_buf + payload_len, 0);
             }
 
             if (con->payload.will_topic[0])
@@ -156,7 +158,7 @@ int reassemble_a_mqtt_msg(const mqtt_packet_t *pkt, u8 *output_buf, u32 *out_len
 
             /* MQTT 5 可选：Reason Code + Properties
                约定：若 reason_code != 0 或 property_len > 0，则一并编码；否则仅 2 字节 PID */
-            if (pa->variable_header.reason_code != 0 || pa->variable_header.property_len > 0) {
+            if (pa->variable_header.reason_code >= 0 || pa->variable_header.property_len >= 0) {
                 payload_buf[payload_len++] = pa->variable_header.reason_code;
                 u32 len = pa->variable_header.property_len;
                 payload_len += write_remaining_length(payload_buf + payload_len, len);

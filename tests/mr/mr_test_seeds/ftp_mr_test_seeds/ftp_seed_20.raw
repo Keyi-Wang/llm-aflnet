@@ -1,0 +1,6 @@
+USER test
+PASS test
+TYPE I
+PASV
+RETR ../../etc/passwd
+QUIT

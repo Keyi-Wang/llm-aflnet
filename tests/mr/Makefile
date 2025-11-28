@@ -13,13 +13,18 @@ SAN ?= 1
 CFLAGS_BASE := -O0 -g -Wall -Wextra -I. -I$(PROTOSRC)
 LDFLAGS_BASE :=
 
+# ---- 覆盖率开关：make PROTO=ftp COVERAGE=1 ----
+ifeq ($(COVERAGE),1)
+  CFLAGS_BASE  += --coverage
+  LDFLAGS_BASE += --coverage
+endif
+
 ifeq ($(SAN),1)
   CFLAGS_BASE += -fsanitize=address,undefined -fno-omit-frame-pointer
   LDFLAGS_BASE += -fsanitize=address,undefined
 endif
 
 OBJS := mr_test.o
-
 
 ifeq ($(wildcard adapters/$(PROTO)_adapter.c),)
 
@@ -36,7 +41,8 @@ else
   OBJS += adapters/$(PROTO)_adapter.o
 endif
 
-
+# 链接时使用带好 SAN / COVERAGE 的 LDFLAGS_BASE
+LDFLAGS := $(LDFLAGS_BASE)
 
 # 协议源码列表（保持原来写法）
 PROTO_SRCS := $(wildcard $(PROTOSRC)/*_parser.c) $(wildcard $(PROTOSRC)/*_reassembler.c)

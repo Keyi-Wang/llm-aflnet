@@ -1,0 +1,5 @@
+USER anonymous
+PASS guest@example.com
+PASV
+LIST
+QUIT

@@ -1,0 +1,4 @@
+USER anonymous
+PASS email@example.com
+HELP
+QUIT

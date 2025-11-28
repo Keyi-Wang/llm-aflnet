@@ -1,0 +1,4 @@
+USER test
+PASS test
+SITE CHMOD 755 script.sh
+QUIT

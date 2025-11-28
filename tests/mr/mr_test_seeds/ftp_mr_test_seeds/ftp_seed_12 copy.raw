@@ -1,0 +1,6 @@
+USER anonymous
+PASS guest@example.com
+TYPE I N
+PASV
+RETR /pub/file.bin
+QUIT

@@ -1,0 +1,5 @@
+USER test
+PASS test
+PASV
+STOR upload.bin
+QUIT

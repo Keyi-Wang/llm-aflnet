@@ -1,0 +1,16 @@
+USER user1
+PASS pass1
+CWD /home/user1
+LIST
+REIN
+USER user2
+PASS pass2
+ACCT accounting
+SMNT shared
+ALLO 4096
+STRU R 1024
+MODE B
+REST 1234
+RETR data.bin
+CDUP
+QUIT

@@ -1,0 +1,5 @@
+USER anonymous
+PASS email@example.com
+TYPE A
+LIST -la
+QUIT

@@ -1,0 +1,4 @@
+USER ftp
+PASS ftp
+NOOP
+QUIT

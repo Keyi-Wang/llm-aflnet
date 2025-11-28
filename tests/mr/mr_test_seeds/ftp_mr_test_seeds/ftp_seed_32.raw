@@ -1,0 +1,5 @@
+USER test
+PASS test
+RNFR dir/old.txt
+RNTO dir/new.txt
+QUIT

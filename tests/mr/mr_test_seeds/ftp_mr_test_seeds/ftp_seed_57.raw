@@ -1,0 +1,4 @@
+USER anonymous
+PASS anonymous@
+SITE CHGRP wheel secret.txt
+QUIT

@@ -1,0 +1,4 @@
+USER test
+PASS test
+RMD spaced dir
+QUIT

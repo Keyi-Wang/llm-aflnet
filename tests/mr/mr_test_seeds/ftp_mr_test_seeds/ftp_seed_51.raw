@@ -1,0 +1,6 @@
+USER anonymous
+PASS anonymous@
+PORT 10,0,0,1,0,20
+LIST
+ABOR
+QUIT

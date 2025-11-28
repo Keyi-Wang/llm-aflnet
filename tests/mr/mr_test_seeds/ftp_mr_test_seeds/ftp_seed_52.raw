@@ -1,0 +1,6 @@
+USER anonymous
+PASS anonymous@
+PASV
+RETR file with spaces .txt
+ABOR
+QUIT

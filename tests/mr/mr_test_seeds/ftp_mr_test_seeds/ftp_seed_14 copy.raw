@@ -1,0 +1,5 @@
+USER test
+PASS test
+PORT 127,0,0,1,7,138
+NLST
+QUIT

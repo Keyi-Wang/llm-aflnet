@@ -1,0 +1,5 @@
+USER anonymous
+PASS anonymous@
+MKD CON
+RMD CON
+QUIT

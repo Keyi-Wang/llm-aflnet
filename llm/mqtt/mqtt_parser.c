@@ -20,43 +20,144 @@ int decode_remaining_length(const uint8_t *buf, size_t max_len, uint32_t *value,
     return -1;  // 编码错误
 }
 
-// 解析 CONNECT 报文
+// 解析 CONNECT 报文（MQTT v5）
+// buf/len 是 Remaining Length 对应的 payload（即 parse_mqtt_msg 已剥掉 fixed header）
+// 返回 0 成功，-1 失败
 int parse_connect_packet(const uint8_t *buf, size_t len, mqtt_connect_packet_t *pkt) {
     size_t offset = 0;
+    if (!buf || !pkt) return -1;
 
-    // Variable Header
+    /* ---- 先清零可选字段，防止残留 ---- */
+    pkt->payload.will_property_len = 0;
+    pkt->payload.will_properties[0] = 0;  /* 二进制raw，但清首字节即可避免旧值干扰 */
+    pkt->payload.will_topic[0] = '\0';
+    pkt->payload.will_payload_len = 0;
+    if (sizeof(pkt->payload.will_payload) > 0) pkt->payload.will_payload[0] = 0;
+
+    pkt->payload.user_name[0] = '\0';
+    pkt->payload.password_len = 0;
+    if (sizeof(pkt->payload.password) > 0) pkt->payload.password[0] = 0;
+
+    /* ---------------- Variable Header ---------------- */
+    if (offset + 2 > len) return -1;
     uint16_t proto_len = read_uint16(buf + offset); offset += 2;
-    if (proto_len >= MAX_PROTOCOL_NAME_LEN) return -1;
+    if (proto_len == 0 || proto_len >= MAX_PROTOCOL_NAME_LEN) return -1;
+    if (offset + proto_len > len) return -1;
     memcpy(pkt->variable_header.protocol_name, buf + offset, proto_len);
     pkt->variable_header.protocol_name[proto_len] = '\0';
     offset += proto_len;
 
+    if (offset + 1 > len) return -1;
     pkt->variable_header.protocol_level = buf[offset++];
+
+    if (offset + 1 > len) return -1;
     pkt->variable_header.connect_flags = buf[offset++];
+
+    if (offset + 2 > len) return -1;
     pkt->variable_header.keep_alive = read_uint16(buf + offset); offset += 2;
 
-    // Property Length (VarInt)
+    /* ---- CONNECT Flags 语义解析/合法性 ---- */
+    uint8_t flags = pkt->variable_header.connect_flags;
+    uint8_t username_flag = (flags >> 7) & 1;
+    uint8_t password_flag = (flags >> 6) & 1;
+    uint8_t will_retain   = (flags >> 5) & 1;
+    uint8_t will_qos      = (flags >> 3) & 0x3;
+    uint8_t will_flag     = (flags >> 2) & 1;
+
+    /* bit0 保留必须为 0（合法筛选） */
+    if (flags & 0x01) return -1;
+    /* will_flag=0 时 will_qos/retain 必须为 0 */
+    if (!will_flag && (will_qos != 0 || will_retain != 0)) return -1;
+    /* will_qos=3 非法 */
+    if (will_qos == 3) return -1;
+    /* password_flag=1 时 username_flag 必须为 1（规范约束） */
+    if (password_flag && !username_flag) return -1;
+
+    /* ---- Properties (VarInt length + bytes) ---- */
     uint32_t prop_len = 0;
     int prop_len_bytes = 0;
     if (decode_remaining_length(buf + offset, len - offset, &prop_len, &prop_len_bytes) != 0) return -1;
+    offset += (size_t)prop_len_bytes;
     pkt->variable_header.property_len = prop_len;
-    offset += prop_len_bytes;
 
     if (prop_len > MAX_PROPERTIES_LEN || offset + prop_len > len) return -1;
     memcpy(pkt->variable_header.properties, buf + offset, prop_len);
     offset += prop_len;
 
-    // Payload: Client ID
+    /* ---------------- Payload ---------------- */
+
+    /* 1) Client ID (UTF-8 string; 允许 0 长度) */
+    if (offset + 2 > len) return -1;
     uint16_t client_id_len = read_uint16(buf + offset); offset += 2;
     if (client_id_len >= MAX_CLIENT_ID_LEN) return -1;
+    if (offset + client_id_len > len) return -1;
     memcpy(pkt->payload.client_id, buf + offset, client_id_len);
     pkt->payload.client_id[client_id_len] = '\0';
     offset += client_id_len;
 
-    // 可选字段未解析（如 will、username、password）
+    /* 2) Will（可选：由 Will Flag 控制） */
+    if (will_flag) {
+        /* 2.1 Will Properties */
+        uint32_t will_prop_len = 0;
+        int will_prop_len_bytes = 0;
+        if (decode_remaining_length(buf + offset, len - offset,
+                                    &will_prop_len, &will_prop_len_bytes) != 0) return -1;
+        offset += (size_t)will_prop_len_bytes;
+
+        if (will_prop_len > MAX_PROPERTIES_LEN || offset + will_prop_len > len) return -1;
+        pkt->payload.will_property_len = will_prop_len;
+        memcpy(pkt->payload.will_properties, buf + offset, will_prop_len);
+        offset += will_prop_len;
+
+        /* 2.2 Will Topic (UTF-8 string) */
+        if (offset + 2 > len) return -1;
+        uint16_t will_topic_len = read_uint16(buf + offset); offset += 2;
+        /* 这里用 MAX_TOPIC_LEN（与你的结构一致） */
+        if (will_topic_len == 0 || will_topic_len >= MAX_TOPIC_LEN) return -1;
+        if (offset + will_topic_len > len) return -1;
+        memcpy(pkt->payload.will_topic, buf + offset, will_topic_len);
+        pkt->payload.will_topic[will_topic_len] = '\0';
+        offset += will_topic_len;
+
+        /* 2.3 Will Payload (Binary data) */
+        if (offset + 2 > len) return -1;
+        uint16_t will_payload_len = read_uint16(buf + offset); offset += 2;
+        if (will_payload_len > MAX_PAYLOAD_LEN) return -1;
+        if (offset + will_payload_len > len) return -1;
+        pkt->payload.will_payload_len = will_payload_len;
+        memcpy(pkt->payload.will_payload, buf + offset, will_payload_len);
+        offset += will_payload_len;
+    }
+
+    /* 3) User Name（可选 UTF-8 string，允许 0 长度） */
+    if (username_flag) {
+        if (offset + 2 > len) return -1;
+        uint16_t user_len = read_uint16(buf + offset); offset += 2;
+        if (user_len >= MAX_USERNAME_LEN) return -1;
+        if (offset + user_len > len) return -1;
+        memcpy(pkt->payload.user_name, buf + offset, user_len);
+        pkt->payload.user_name[user_len] = '\0';
+        offset += user_len;
+    }
+
+    /* 4) Password（可选 binary data，允许 0 长度） */
+    if (password_flag) {
+        if (offset + 2 > len) return -1;
+        uint16_t pass_len = read_uint16(buf + offset); offset += 2;
+        if (pass_len > MAX_PASSWORD_LEN) return -1;
+        if (offset + pass_len > len) return -1;
+        pkt->payload.password_len = pass_len;
+        memcpy(pkt->payload.password, buf + offset, pass_len);
+        offset += pass_len;
+    }
+
+    /* ---- 最后必须精确消费完 Remaining Length ---- */
+    if (offset != len) return -1;
 
     return 0;
 }
+
+
 
 // 解析 SUBSCRIBE 报文
 int parse_subscribe_packet(const uint8_t *buf, size_t len, mqtt_subscribe_packet_t *pkt) {
@@ -239,18 +340,18 @@ int parse_auth_packet(const uint8_t *buf, size_t len, mqtt_auth_packet_t *pkt) {
 
     size_t offset = 0;
 
-    // 固定头部：packet_type (1 byte)
-    pkt->fixed_header.packet_type = buf[offset++];
+    // // 固定头部：packet_type (1 byte)
+    // pkt->fixed_header.packet_type = buf[offset++];
 
-    // 解析 remaining_length
-    uint32_t remaining_len = 0;
-    int rem_len_bytes = 0;
-    if (decode_remaining_length(buf + offset, len - offset, &remaining_len, &rem_len_bytes) != 0)
-        return -1;
-    pkt->fixed_header.remaining_length = remaining_len;
-    offset += rem_len_bytes;
+    // // 解析 remaining_length
+    // uint32_t remaining_len = 0;
+    // int rem_len_bytes = 0;
+    // if (decode_remaining_length(buf + offset, len - offset, &remaining_len, &rem_len_bytes) != 0)
+    //     return -1;
+    // pkt->fixed_header.remaining_length = remaining_len;
+    // offset += rem_len_bytes;
 
-    if (offset >= len) return -1;
+    // if (offset >= len) return -1;
 
     // 可变头部：reason_code (1 byte)
     pkt->variable_header.reason_code = buf[offset++];
@@ -270,9 +371,9 @@ int parse_auth_packet(const uint8_t *buf, size_t len, mqtt_auth_packet_t *pkt) {
     offset += property_len;
 
     // 校验实际读取的数据长度与 remaining_length 是否一致
-    if ((offset - (1 + rem_len_bytes)) != pkt->fixed_header.remaining_length) {
-        return -1;
-    }
+    // if ((offset - (1 + rem_len_bytes)) != pkt->fixed_header.remaining_length) {
+    //     return -1;
+    // }
 
     return 0;
 }
@@ -487,161 +588,161 @@ size_t parse_mqtt_msg(const uint8_t *buf, size_t buf_len, mqtt_packet_t *out_pac
 }
 
 
-void print_mqtt_packets(const mqtt_packet_t *pkt, size_t count) {
-    for(int index = 0; index < count; index++){
-        printf("======= MQTT Packet #%zu =======\n", index + 1);
-        printf("Packet Type: ");
+// void print_mqtt_packets(const mqtt_packet_t *pkt, size_t count) {
+//     for(int index = 0; index < count; index++){
+//         printf("======= MQTT Packet #%zu =======\n", index + 1);
+//         printf("Packet Type: ");
 
-        switch (pkt->type) {
-            case TYPE_CONNECT: {
-                printf("CONNECT (0x%02X)\n", pkt->connect.fixed_header.packet_type);
-                printf("Remaining Length: %u\n", pkt->connect.fixed_header.remaining_length);
-                printf("  Protocol Name : %s\n", pkt->connect.variable_header.protocol_name);
-                printf("  Protocol Level: %u\n", pkt->connect.variable_header.protocol_level);
-                printf("  Connect Flags : 0x%02X\n", pkt->connect.variable_header.connect_flags);
-                printf("  Keep Alive    : %u\n", pkt->connect.variable_header.keep_alive);
-                printf("  Property Len  : %u\n", pkt->connect.variable_header.property_len);
-                printf("  Properties    : ");
-                for (size_t i = 0; i < pkt->connect.variable_header.property_len; ++i) {
-                    printf("%02X ", pkt->connect.variable_header.properties[i]);
-                }
-                printf("\n");
-                printf("  Client ID     : %s\n", pkt->connect.payload.client_id);
-                // 如有需要，可继续打印 will、username、password 等
-                break;
-            }
+//         switch (pkt->type) {
+//             case TYPE_CONNECT: {
+//                 printf("CONNECT (0x%02X)\n", pkt->connect.fixed_header.packet_type);
+//                 printf("Remaining Length: %u\n", pkt->connect.fixed_header.remaining_length);
+//                 printf("  Protocol Name : %s\n", pkt->connect.variable_header.protocol_name);
+//                 printf("  Protocol Level: %u\n", pkt->connect.variable_header.protocol_level);
+//                 printf("  Connect Flags : 0x%02X\n", pkt->connect.variable_header.connect_flags);
+//                 printf("  Keep Alive    : %u\n", pkt->connect.variable_header.keep_alive);
+//                 printf("  Property Len  : %u\n", pkt->connect.variable_header.property_len);
+//                 printf("  Properties    : ");
+//                 for (size_t i = 0; i < pkt->connect.variable_header.property_len; ++i) {
+//                     printf("%02X ", pkt->connect.variable_header.properties[i]);
+//                 }
+//                 printf("\n");
+//                 printf("  Client ID     : %s\n", pkt->connect.payload.client_id);
+//                 // 如有需要，可继续打印 will、username、password 等
+//                 break;
+//             }
 
-            case TYPE_SUBSCRIBE: {
-                printf("SUBSCRIBE (0x%02X)\n", pkt->subscribe.fixed_header.packet_type);
-                printf("Remaining Length: %u\n", pkt->subscribe.fixed_header.remaining_length);
-                printf("  Packet ID     : %u\n", pkt->subscribe.variable_header.packet_identifier);
-                printf("  Property Len  : %u\n", pkt->subscribe.variable_header.property_len);
-                for (size_t i = 0; i < pkt->subscribe.variable_header.property_len; ++i) {
-                    printf("%02X ", pkt->subscribe.variable_header.properties[i]);
-                }
-                printf("\n");
-                printf("  Topic Count   : %u\n", pkt->subscribe.payload.topic_count);
+//             case TYPE_SUBSCRIBE: {
+//                 printf("SUBSCRIBE (0x%02X)\n", pkt->subscribe.fixed_header.packet_type);
+//                 printf("Remaining Length: %u\n", pkt->subscribe.fixed_header.remaining_length);
+//                 printf("  Packet ID     : %u\n", pkt->subscribe.variable_header.packet_identifier);
+//                 printf("  Property Len  : %u\n", pkt->subscribe.variable_header.property_len);
+//                 for (size_t i = 0; i < pkt->subscribe.variable_header.property_len; ++i) {
+//                     printf("%02X ", pkt->subscribe.variable_header.properties[i]);
+//                 }
+//                 printf("\n");
+//                 printf("  Topic Count   : %u\n", pkt->subscribe.payload.topic_count);
 
-                for (int i = 0; i < pkt->subscribe.payload.topic_count; ++i) {
-                    printf("    Topic Filter[%d]: %s (QoS=%u)\n", i,
-                        pkt->subscribe.payload.topic_filters[i].topic_filter,
-                        pkt->subscribe.payload.topic_filters[i].qos);
-                }
-                break;
-            }
-            case TYPE_PUBLISH: {
-                printf("PUBLISH (0x%02X)\n", pkt->publish.fixed_header.packet_type);
-                printf("Remaining Length: %u\n", pkt->publish.fixed_header.remaining_length);
-                printf("  Topic Name    : %s\n", pkt->publish.variable_header.topic_name);
-                if (pkt->publish.qos > 0) {
-                    printf("  Packet ID     : %u\n", pkt->publish.variable_header.packet_identifier);
-                }
-                printf("  Property Len  : %u\n", pkt->publish.variable_header.property_len);
-                printf("  Payload Length: %u\n", pkt->publish.payload.payload_len);
-                // 可打印 payload 内容
-                break;
-            }
-            case TYPE_UNSUBSCRIBE: {
-                printf("UNSUBSCRIBE (0x%02X)\n", pkt->unsubscribe.fixed_header.packet_type);
-                printf("Remaining Length: %u\n", pkt->unsubscribe.fixed_header.remaining_length);
-                printf("  Packet ID     : %u\n", pkt->unsubscribe.variable_header.packet_identifier);
-                printf("  Property Len  : %u\n", pkt->unsubscribe.variable_header.property_len);
-                printf("  Topic Count   : %u\n", pkt->unsubscribe.payload.topic_count);
+//                 for (int i = 0; i < pkt->subscribe.payload.topic_count; ++i) {
+//                     printf("    Topic Filter[%d]: %s (QoS=%u)\n", i,
+//                         pkt->subscribe.payload.topic_filters[i].topic_filter,
+//                         pkt->subscribe.payload.topic_filters[i].qos);
+//                 }
+//                 break;
+//             }
+//             case TYPE_PUBLISH: {
+//                 printf("PUBLISH (0x%02X)\n", pkt->publish.fixed_header.packet_type);
+//                 printf("Remaining Length: %u\n", pkt->publish.fixed_header.remaining_length);
+//                 printf("  Topic Name    : %s\n", pkt->publish.variable_header.topic_name);
+//                 if (pkt->publish.qos > 0) {
+//                     printf("  Packet ID     : %u\n", pkt->publish.variable_header.packet_identifier);
+//                 }
+//                 printf("  Property Len  : %u\n", pkt->publish.variable_header.property_len);
+//                 printf("  Payload Length: %u\n", pkt->publish.payload.payload_len);
+//                 // 可打印 payload 内容
+//                 break;
+//             }
+//             case TYPE_UNSUBSCRIBE: {
+//                 printf("UNSUBSCRIBE (0x%02X)\n", pkt->unsubscribe.fixed_header.packet_type);
+//                 printf("Remaining Length: %u\n", pkt->unsubscribe.fixed_header.remaining_length);
+//                 printf("  Packet ID     : %u\n", pkt->unsubscribe.variable_header.packet_identifier);
+//                 printf("  Property Len  : %u\n", pkt->unsubscribe.variable_header.property_len);
+//                 printf("  Topic Count   : %u\n", pkt->unsubscribe.payload.topic_count);
 
-                for (int i = 0; i < pkt->unsubscribe.payload.topic_count; ++i) {
-                    printf("    Topic Filter[%d]: %s\n", i, pkt->unsubscribe.payload.topic_filters[i]);
-                }
-                break;
-            }
-            case TYPE_AUTH: {
-                printf("AUTH (0x%02X)\n", pkt->auth.fixed_header.packet_type);
-                printf("Remaining Length: %u\n", pkt->auth.fixed_header.remaining_length);
-                printf("  Reason Code   : %u\n", pkt->auth.variable_header.reason_code);
-                printf("  Property Len  : %u\n", pkt->auth.variable_header.property_len);
-                // 可打印 properties 内容
-                break;
-            }
-                        case TYPE_PUBACK: {
-                printf("PUBACK (0x%02X)\n", pkt->puback.fixed_header.packet_type);
-                printf("Remaining Length: %u\n", pkt->puback.fixed_header.remaining_length);
-                printf("  Packet ID     : %u\n", pkt->puback.variable_header.packet_identifier);
-                printf("  Reason Code   : %u\n", pkt->puback.variable_header.reason_code);
-                printf("  Property Len  : %u\n", pkt->puback.variable_header.property_len);
-                if (pkt->puback.variable_header.property_len) {
-                    printf("  Properties    : ");
-                    for (size_t i = 0; i < pkt->puback.variable_header.property_len; ++i)
-                        printf("%02X ", pkt->puback.variable_header.properties[i]);
-                    printf("\n");
-                }
-                break;
-            }
-            case TYPE_PUBREC: {
-                printf("PUBREC (0x%02X)\n", pkt->pubrec.fixed_header.packet_type);
-                printf("Remaining Length: %u\n", pkt->pubrec.fixed_header.remaining_length);
-                printf("  Packet ID     : %u\n", pkt->pubrec.variable_header.packet_identifier);
-                printf("  Reason Code   : %u\n", pkt->pubrec.variable_header.reason_code);
-                printf("  Property Len  : %u\n", pkt->pubrec.variable_header.property_len);
-                if (pkt->pubrec.variable_header.property_len) {
-                    printf("  Properties    : ");
-                    for (size_t i = 0; i < pkt->pubrec.variable_header.property_len; ++i)
-                        printf("%02X ", pkt->pubrec.variable_header.properties[i]);
-                    printf("\n");
-                }
-                break;
-            }
-            case TYPE_PUBREL: {
-                printf("PUBREL (0x%02X)\n", pkt->pubrel.fixed_header.packet_type);
-                printf("Remaining Length: %u\n", pkt->pubrel.fixed_header.remaining_length);
-                printf("  Packet ID     : %u\n", pkt->pubrel.variable_header.packet_identifier);
-                printf("  Reason Code   : %u\n", pkt->pubrel.variable_header.reason_code);
-                printf("  Property Len  : %u\n", pkt->pubrel.variable_header.property_len);
-                if (pkt->pubrel.variable_header.property_len) {
-                    printf("  Properties    : ");
-                    for (size_t i = 0; i < pkt->pubrel.variable_header.property_len; ++i)
-                        printf("%02X ", pkt->pubrel.variable_header.properties[i]);
-                    printf("\n");
-                }
-                break;
-            }
-            case TYPE_PUBCOMP: {
-                printf("PUBCOMP (0x%02X)\n", pkt->pubcomp.fixed_header.packet_type);
-                printf("Remaining Length: %u\n", pkt->pubcomp.fixed_header.remaining_length);
-                printf("  Packet ID     : %u\n", pkt->pubcomp.variable_header.packet_identifier);
-                printf("  Reason Code   : %u\n", pkt->pubcomp.variable_header.reason_code);
-                printf("  Property Len  : %u\n", pkt->pubcomp.variable_header.property_len);
-                if (pkt->pubcomp.variable_header.property_len) {
-                    printf("  Properties    : ");
-                    for (size_t i = 0; i < pkt->pubcomp.variable_header.property_len; ++i)
-                        printf("%02X ", pkt->pubcomp.variable_header.properties[i]);
-                    printf("\n");
-                }
-                break;
-            }
-            case TYPE_PINGREQ: {
-                printf("PINGREQ (0x%02X)\n", pkt->pingreq.fixed_header.packet_type);
-                printf("Remaining Length: %u\n", pkt->pingreq.fixed_header.remaining_length);
-                break;
-            }
-            case TYPE_DISCONNECT: {
-                printf("DISCONNECT (0x%02X)\n", pkt->disconnect.fixed_header.packet_type);
-                printf("Remaining Length: %u\n", pkt->disconnect.fixed_header.remaining_length);
-                printf("  Reason Code   : %u\n", pkt->disconnect.variable_header.reason_code);
-                printf("  Property Len  : %u\n", pkt->disconnect.variable_header.property_len);
-                if (pkt->disconnect.variable_header.property_len) {
-                    printf("  Properties    : ");
-                    for (size_t i = 0; i < pkt->disconnect.variable_header.property_len; ++i)
-                        printf("%02X ", pkt->disconnect.variable_header.properties[i]);
-                    printf("\n");
-                }
-                break;
-            }
+//                 for (int i = 0; i < pkt->unsubscribe.payload.topic_count; ++i) {
+//                     printf("    Topic Filter[%d]: %s\n", i, pkt->unsubscribe.payload.topic_filters[i]);
+//                 }
+//                 break;
+//             }
+//             case TYPE_AUTH: {
+//                 printf("AUTH (0x%02X)\n", pkt->auth.fixed_header.packet_type);
+//                 printf("Remaining Length: %u\n", pkt->auth.fixed_header.remaining_length);
+//                 printf("  Reason Code   : %u\n", pkt->auth.variable_header.reason_code);
+//                 printf("  Property Len  : %u\n", pkt->auth.variable_header.property_len);
+//                 // 可打印 properties 内容
+//                 break;
+//             }
+//                         case TYPE_PUBACK: {
+//                 printf("PUBACK (0x%02X)\n", pkt->puback.fixed_header.packet_type);
+//                 printf("Remaining Length: %u\n", pkt->puback.fixed_header.remaining_length);
+//                 printf("  Packet ID     : %u\n", pkt->puback.variable_header.packet_identifier);
+//                 printf("  Reason Code   : %u\n", pkt->puback.variable_header.reason_code);
+//                 printf("  Property Len  : %u\n", pkt->puback.variable_header.property_len);
+//                 if (pkt->puback.variable_header.property_len) {
+//                     printf("  Properties    : ");
+//                     for (size_t i = 0; i < pkt->puback.variable_header.property_len; ++i)
+//                         printf("%02X ", pkt->puback.variable_header.properties[i]);
+//                     printf("\n");
+//                 }
+//                 break;
+//             }
+//             case TYPE_PUBREC: {
+//                 printf("PUBREC (0x%02X)\n", pkt->pubrec.fixed_header.packet_type);
+//                 printf("Remaining Length: %u\n", pkt->pubrec.fixed_header.remaining_length);
+//                 printf("  Packet ID     : %u\n", pkt->pubrec.variable_header.packet_identifier);
+//                 printf("  Reason Code   : %u\n", pkt->pubrec.variable_header.reason_code);
+//                 printf("  Property Len  : %u\n", pkt->pubrec.variable_header.property_len);
+//                 if (pkt->pubrec.variable_header.property_len) {
+//                     printf("  Properties    : ");
+//                     for (size_t i = 0; i < pkt->pubrec.variable_header.property_len; ++i)
+//                         printf("%02X ", pkt->pubrec.variable_header.properties[i]);
+//                     printf("\n");
+//                 }
+//                 break;
+//             }
+//             case TYPE_PUBREL: {
+//                 printf("PUBREL (0x%02X)\n", pkt->pubrel.fixed_header.packet_type);
+//                 printf("Remaining Length: %u\n", pkt->pubrel.fixed_header.remaining_length);
+//                 printf("  Packet ID     : %u\n", pkt->pubrel.variable_header.packet_identifier);
+//                 printf("  Reason Code   : %u\n", pkt->pubrel.variable_header.reason_code);
+//                 printf("  Property Len  : %u\n", pkt->pubrel.variable_header.property_len);
+//                 if (pkt->pubrel.variable_header.property_len) {
+//                     printf("  Properties    : ");
+//                     for (size_t i = 0; i < pkt->pubrel.variable_header.property_len; ++i)
+//                         printf("%02X ", pkt->pubrel.variable_header.properties[i]);
+//                     printf("\n");
+//                 }
+//                 break;
+//             }
+//             case TYPE_PUBCOMP: {
+//                 printf("PUBCOMP (0x%02X)\n", pkt->pubcomp.fixed_header.packet_type);
+//                 printf("Remaining Length: %u\n", pkt->pubcomp.fixed_header.remaining_length);
+//                 printf("  Packet ID     : %u\n", pkt->pubcomp.variable_header.packet_identifier);
+//                 printf("  Reason Code   : %u\n", pkt->pubcomp.variable_header.reason_code);
+//                 printf("  Property Len  : %u\n", pkt->pubcomp.variable_header.property_len);
+//                 if (pkt->pubcomp.variable_header.property_len) {
+//                     printf("  Properties    : ");
+//                     for (size_t i = 0; i < pkt->pubcomp.variable_header.property_len; ++i)
+//                         printf("%02X ", pkt->pubcomp.variable_header.properties[i]);
+//                     printf("\n");
+//                 }
+//                 break;
+//             }
+//             case TYPE_PINGREQ: {
+//                 printf("PINGREQ (0x%02X)\n", pkt->pingreq.fixed_header.packet_type);
+//                 printf("Remaining Length: %u\n", pkt->pingreq.fixed_header.remaining_length);
+//                 break;
+//             }
+//             case TYPE_DISCONNECT: {
+//                 printf("DISCONNECT (0x%02X)\n", pkt->disconnect.fixed_header.packet_type);
+//                 printf("Remaining Length: %u\n", pkt->disconnect.fixed_header.remaining_length);
+//                 printf("  Reason Code   : %u\n", pkt->disconnect.variable_header.reason_code);
+//                 printf("  Property Len  : %u\n", pkt->disconnect.variable_header.property_len);
+//                 if (pkt->disconnect.variable_header.property_len) {
+//                     printf("  Properties    : ");
+//                     for (size_t i = 0; i < pkt->disconnect.variable_header.property_len; ++i)
+//                         printf("%02X ", pkt->disconnect.variable_header.properties[i]);
+//                     printf("\n");
+//                 }
+//                 break;
+//             }
 
-            case TYPE_UNKNOWN:
-            default:
-                printf("UNKNOWN TYPE\n");
-                break;
-        }
+//             case TYPE_UNKNOWN:
+//             default:
+//                 printf("UNKNOWN TYPE\n");
+//                 break;
+//         }
 
-        printf("=================================\n\n");
-    }
-}
+//         printf("=================================\n\n");
+//     }
+// }

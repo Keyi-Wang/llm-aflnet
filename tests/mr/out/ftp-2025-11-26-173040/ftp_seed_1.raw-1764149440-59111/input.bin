@@ -1,0 +1,19 @@
+USER testuser
+PASS secret
+ACCT main-account
+SMNT /mnt/volume1
+CWD /pub/uploads
+ALLO 1024 R 512
+STRU F
+MODE S
+REST 0
+RETR file1.txt
+CDUP
+  
+UNKNOWNs
+TYPE
+REST
+ALLO 10000
+ALLO 10000 
+ALLO 10000,
+QUIT
