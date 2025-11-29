@@ -1,0 +1,4 @@
+SETUP rtsp://example.com/media.mp4/trackID=1 RTSP/1.0
+CSeq: 2
+Transport: RTP/AVP;unicast;client_port=8000-8001
+

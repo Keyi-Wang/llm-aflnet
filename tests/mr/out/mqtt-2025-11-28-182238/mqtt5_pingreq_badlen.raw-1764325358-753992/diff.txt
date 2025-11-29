@@ -1,0 +1,5 @@
+orig_len=3 reasm_len=0
+OFFSET  A   B
+000000  C0  --
+000001  01  --
+000002  00  --

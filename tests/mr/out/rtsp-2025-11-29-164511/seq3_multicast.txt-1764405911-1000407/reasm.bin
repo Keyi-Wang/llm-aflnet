@@ -1,0 +1,31 @@
+OPTIONS rtsp://example.com/mcast.sdp RTSP/1.0
+CSeq: 1
+User-Agent: LEMUR-FUZZ/1.0
+
+DESCRIBE rtsp://example.com/mcast.sdp RTSP/1.0
+CSeq: 2
+Accept: application/sdp
+User-Agent: LEMUR-FUZZ/1.0
+
+SETUP rtsp://example.com/mcast.sdp/trackID=0 RTSP/1.0
+CSeq: 3
+User-Agent: LEMUR-FUZZ/1.0
+Transport: RTP/AVP;multicast;ttl=5
+
+PLAY rtsp://example.com/mcast.sdp RTSP/1.0
+CSeq: 4
+Range: npt=0.000-
+Session: MCAST001
+User-Agent: LEMUR-FUZZ/1.0
+
+GET_PARAMETER rtsp://example.com/mcast.sdp RTSP/1.0
+CSeq: 5
+Bandwidth: 10000
+Session: MCAST001
+User-Agent: LEMUR-FUZZ/1.0
+
+TEARDOWN rtsp://example.com/mcast.sdp RTSP/1.0
+CSeq: 6
+Session: MCAST001
+User-Agent: LEMUR-FUZZ/1.0
+

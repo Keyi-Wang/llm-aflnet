@@ -1,0 +1,20 @@
+SETUP rtsp://example.com/media.mp4/trackID=1 RTSP/1.0
+CSeq: 2
+Connection: keep-alive
+Date: Mon, 23 Jun 2025 12:34:56 GMT
+Via: RTSP/1.0 client1.example.com:554;branch=z9hG4bK776asdhds
+Accept-Language: en-US, zh-CN;q=0.9
+Authorization: Basic dXNlcjpzZWNyZXQ=
+Bandwidth: 16000
+Blocksize: 1024
+Cache-Control: no-cache
+Conference: 12345678
+From: user@example.com
+If-Modified-Since: Mon, 23 Jun 2025 10:00:00 GMT
+Proxy-Require: proxy-feature-tag
+Referer: http://example.com/player.html
+Require: implicit-play
+Transport: Transport:RTP/AVP;unicast;client_port_long_pre=8000-8001
+User-Agent: MyRTSPClient/1.0
+Session: 12345678;timeout=60
+

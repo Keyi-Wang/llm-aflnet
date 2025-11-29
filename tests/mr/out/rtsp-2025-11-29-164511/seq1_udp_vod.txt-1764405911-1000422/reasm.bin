@@ -1,0 +1,43 @@
+OPTIONS rtsp://example.com/media.mp4 RTSP/1.0
+CSeq: 1
+User-Agent: LEMUR-FUZZ/1.0
+
+DESCRIBE rtsp://example.com/media.mp4 RTSP/1.0
+CSeq: 2
+Accept: application/sdp
+User-Agent: LEMUR-FUZZ/1.0
+
+SETUP rtsp://example.com/media.mp4/trackID=0 RTSP/1.0
+CSeq: 3
+User-Agent: LEMUR-FUZZ/1.0
+Transport: RTP/AVP;unicast;client_port=6970-6971
+
+SETUP rtsp://example.com/media.mp4/trackID=1 RTSP/1.0
+CSeq: 4
+User-Agent: LEMUR-FUZZ/1.0
+Transport: RTP/AVP;unicast;client_port=6972-6973
+Session: 12345678
+
+PLAY rtsp://example.com/media.mp4 RTSP/1.0
+CSeq: 5
+Range: npt=0.000-
+Scale: 1.000
+Session: 12345678
+Speed: 1.000
+User-Agent: LEMUR-FUZZ/1.0
+
+GET_PARAMETER rtsp://example.com/media.mp4 RTSP/1.0
+CSeq: 6
+Session: 12345678
+User-Agent: LEMUR-FUZZ/1.0
+
+PAUSE rtsp://example.com/media.mp4 RTSP/1.0
+CSeq: 7
+Session: 12345678
+User-Agent: LEMUR-FUZZ/1.0
+
+TEARDOWN rtsp://example.com/media.mp4 RTSP/1.0
+CSeq: 8
+Session: 12345678
+User-Agent: LEMUR-FUZZ/1.0
+

@@ -85,7 +85,7 @@ int dut_parse(const uint8_t *buf, size_t len, msg_array_t *out_arr) {
 
     out_arr->n = n;
     map_set(out_arr, holder);
-    print_rtsp_packets(holder->pkts,n);
+    // print_rtsp_packets(holder->pkts,n);
     return 0;
 }
 

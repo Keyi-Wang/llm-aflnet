@@ -50,19 +50,19 @@ int serialize_options(const rtsp_options_packet_t *p, u8 *output_buf, u32 *out_l
                    p->connection_header.crlf);
 
     if (p->date_header.name[0] && p->date_header.time_of_day[0])
-        APPEND_FMT(output_buf, offset, "%s%s%s%s%s%s%s%s%s%s%s%s%s%s",
+        APPEND_FMT(output_buf, offset, "%s%s%s%s%s%c%s%c%s%c%s%c%s%s",
                    p->date_header.name,
                    p->date_header.colon_space,
                    p->date_header.wkday,
                    p->date_header.comma_space,
                    p->date_header.day,
-                   &p->date_header.space1,
+                   p->date_header.space1,
                    p->date_header.month,
-                   &p->date_header.space2,
+                   p->date_header.space2,
                    p->date_header.year,
-                   &p->date_header.space3,
+                   p->date_header.space3,
                    p->date_header.time_of_day,
-                   &p->date_header.space4,
+                   p->date_header.space4,
                    p->date_header.gmt,
                    p->date_header.crlf);
 
@@ -167,19 +167,19 @@ int serialize_describe(const rtsp_describe_packet_t *p, u8 *output_buf, u32 *out
                    p->connection_header.crlf);
 
     if (p->date_header.name[0] && p->date_header.time_of_day[0])
-        APPEND_FMT(output_buf, offset, "%s%s%s%s%s%s%s%s%s%s%s%s%s%s",
+        APPEND_FMT(output_buf, offset, "%s%s%s%s%s%c%s%c%s%c%s%c%s%s",
                    p->date_header.name,
                    p->date_header.colon_space,
                    p->date_header.wkday,
                    p->date_header.comma_space,
                    p->date_header.day,
-                   &p->date_header.space1,
+                   p->date_header.space1,
                    p->date_header.month,
-                   &p->date_header.space2,
+                   p->date_header.space2,
                    p->date_header.year,
-                   &p->date_header.space3,
+                   p->date_header.space3,
                    p->date_header.time_of_day,
-                   &p->date_header.space4,
+                   p->date_header.space4,
                    p->date_header.gmt,
                    p->date_header.crlf);
 
@@ -265,7 +265,7 @@ int serialize_describe(const rtsp_describe_packet_t *p, u8 *output_buf, u32 *out
                    p->content_language_header.language,
                    p->content_language_header.crlf);
 
-    if (p->content_length_header.name[0] && p->content_length_header.length > 0)
+    if (p->content_length_header.name[0] && p->content_length_header.length >= 0)
         APPEND_FMT(output_buf, offset, "%s%s%d%s",
                    p->content_length_header.name,
                    p->content_length_header.colon_space,
@@ -280,19 +280,19 @@ int serialize_describe(const rtsp_describe_packet_t *p, u8 *output_buf, u32 *out
                    p->content_location_header.crlf);
 
     if (p->expires_header.name[0] && p->expires_header.time_of_day[0])
-        APPEND_FMT(output_buf, offset, "%s%s%s%s%s%s%s%s%s%s%s%s%s%s",
+        APPEND_FMT(output_buf, offset, "%s%s%s%s%s%c%s%c%s%c%s%c%s%s",
                    p->expires_header.name,
                    p->expires_header.colon_space,
                    p->expires_header.wkday,
                    p->expires_header.comma_space,
                    p->expires_header.day,
-                   &p->expires_header.space1,
+                   p->expires_header.space1,
                    p->expires_header.month,
-                   &p->expires_header.space2,
+                   p->expires_header.space2,
                    p->expires_header.year,
-                   &p->expires_header.space3,
+                   p->expires_header.space3,
                    p->expires_header.time_of_day,
-                   &p->expires_header.space4,
+                   p->expires_header.space4,
                    p->expires_header.gmt,
                    p->expires_header.crlf);
 
@@ -304,36 +304,36 @@ int serialize_describe(const rtsp_describe_packet_t *p, u8 *output_buf, u32 *out
                    p->from_header.crlf);
 
     if (p->if_modified_since_header.name[0] && p->if_modified_since_header.time_of_day[0])
-        APPEND_FMT(output_buf, offset, "%s%s%s%s%s%s%s%s%s%s%s%s%s%s",
+        APPEND_FMT(output_buf, offset, "%s%s%s%s%s%c%s%c%s%c%s%c%s%s",
                    p->if_modified_since_header.name,
                    p->if_modified_since_header.colon_space,
                    p->if_modified_since_header.wkday,
                    p->if_modified_since_header.comma_space,
                    p->if_modified_since_header.day,
-                   &p->if_modified_since_header.space1,
+                   p->if_modified_since_header.space1,
                    p->if_modified_since_header.month,
-                   &p->if_modified_since_header.space2,
+                   p->if_modified_since_header.space2,
                    p->if_modified_since_header.year,
-                   &p->if_modified_since_header.space3,
+                   p->if_modified_since_header.space3,
                    p->if_modified_since_header.time_of_day,
-                   &p->if_modified_since_header.space4,
+                   p->if_modified_since_header.space4,
                    p->if_modified_since_header.gmt,
                    p->if_modified_since_header.crlf);
 
     if (p->last_modified_header.name[0] && p->last_modified_header.time_of_day[0])
-        APPEND_FMT(output_buf, offset, "%s%s%s%s%s%s%s%s%s%s%s%s%s%s",
+        APPEND_FMT(output_buf, offset, "%s%s%s%s%s%c%s%c%s%c%s%c%s%s",
                    p->last_modified_header.name,
                    p->last_modified_header.colon_space,
                    p->last_modified_header.wkday,
                    p->last_modified_header.comma_space,
                    p->last_modified_header.day,
-                   &p->last_modified_header.space1,
+                   p->last_modified_header.space1,
                    p->last_modified_header.month,
-                   &p->last_modified_header.space2,
+                   p->last_modified_header.space2,
                    p->last_modified_header.year,
-                   &p->last_modified_header.space3,
+                   p->last_modified_header.space3,
                    p->last_modified_header.time_of_day,
-                   &p->last_modified_header.space4,
+                   p->last_modified_header.space4,
                    p->last_modified_header.gmt,
                    p->last_modified_header.crlf);
 
@@ -414,19 +414,19 @@ int serialize_setup(const rtsp_setup_packet_t *p, u8 *output_buf, u32 *out_len) 
                    p->connection_header.crlf);
 
     if (p->date_header.name[0] && p->date_header.time_of_day[0])
-        APPEND_FMT(output_buf, offset, "%s%s%s%s%s%s%s%s%s%s%s%s%s%s",
+        APPEND_FMT(output_buf, offset, "%s%s%s%s%s%c%s%c%s%c%s%c%s%s",
                    p->date_header.name,
                    p->date_header.colon_space,
                    p->date_header.wkday,
                    p->date_header.comma_space,
                    p->date_header.day,
-                   &p->date_header.space1,
+                   p->date_header.space1,
                    p->date_header.month,
-                   &p->date_header.space2,
+                   p->date_header.space2,
                    p->date_header.year,
-                   &p->date_header.space3,
+                   p->date_header.space3,
                    p->date_header.time_of_day,
-                   &p->date_header.space4,
+                   p->date_header.space4,
                    p->date_header.gmt,
                    p->date_header.crlf);
 
@@ -498,19 +498,19 @@ int serialize_setup(const rtsp_setup_packet_t *p, u8 *output_buf, u32 *out_len) 
                    p->from_header.crlf);
 
     if (p->if_modified_since_header.name[0] && p->if_modified_since_header.time_of_day[0])
-        APPEND_FMT(output_buf, offset, "%s%s%s%s%s%s%s%s%s%s%s%s%s%s",
+        APPEND_FMT(output_buf, offset, "%s%s%s%s%s%c%s%c%s%c%s%c%s%s",
                    p->if_modified_since_header.name,
                    p->if_modified_since_header.colon_space,
                    p->if_modified_since_header.wkday,
                    p->if_modified_since_header.comma_space,
                    p->if_modified_since_header.day,
-                   &p->if_modified_since_header.space1,
+                   p->if_modified_since_header.space1,
                    p->if_modified_since_header.month,
-                   &p->if_modified_since_header.space2,
+                   p->if_modified_since_header.space2,
                    p->if_modified_since_header.year,
-                   &p->if_modified_since_header.space3,
+                   p->if_modified_since_header.space3,
                    p->if_modified_since_header.time_of_day,
-                   &p->if_modified_since_header.space4,
+                   p->if_modified_since_header.space4,
                    p->if_modified_since_header.gmt,
                    p->if_modified_since_header.crlf);
 
@@ -605,19 +605,19 @@ int serialize_play(const rtsp_play_packet_t *p, u8 *output_buf, u32 *out_len) {
                    p->connection_header.crlf);
 
     if (p->date_header.name[0] && p->date_header.time_of_day[0])
-        APPEND_FMT(output_buf, offset, "%s%s%s%s%s%s%s%s%s%s%s%s%s%s",
+        APPEND_FMT(output_buf, offset, "%s%s%s%s%s%c%s%c%s%c%s%c%s%s",
                    p->date_header.name,
                    p->date_header.colon_space,
                    p->date_header.wkday,
                    p->date_header.comma_space,
                    p->date_header.day,
-                   &p->date_header.space1,
+                   p->date_header.space1,
                    p->date_header.month,
-                   &p->date_header.space2,
+                   p->date_header.space2,
                    p->date_header.year,
-                   &p->date_header.space3,
+                   p->date_header.space3,
                    p->date_header.time_of_day,
-                   &p->date_header.space4,
+                   p->date_header.space4,
                    p->date_header.gmt,
                    p->date_header.crlf);
 
@@ -771,19 +771,19 @@ int serialize_pause(const rtsp_pause_packet_t *p, u8 *output_buf, u32 *out_len) 
                    p->connection_header.crlf);
 
     if (p->date_header.name[0] && p->date_header.time_of_day[0])
-        APPEND_FMT(output_buf, offset, "%s%s%s%s%s%s%s%s%s%s%s%s%s%s",
+        APPEND_FMT(output_buf, offset, "%s%s%s%s%s%c%s%c%s%c%s%c%s%s",
                    p->date_header.name,
                    p->date_header.colon_space,
                    p->date_header.wkday,
                    p->date_header.comma_space,
                    p->date_header.day,
-                   &p->date_header.space1,
+                   p->date_header.space1,
                    p->date_header.month,
-                   &p->date_header.space2,
+                   p->date_header.space2,
                    p->date_header.year,
-                   &p->date_header.space3,
+                   p->date_header.space3,
                    p->date_header.time_of_day,
-                   &p->date_header.space4,
+                   p->date_header.space4,
                    p->date_header.gmt,
                    p->date_header.crlf);
 
@@ -922,19 +922,19 @@ int serialize_teardown(const rtsp_teardown_packet_t *p, u8 *output_buf, u32 *out
                    p->connection_header.crlf);
 
     if (p->date_header.name[0] && p->date_header.time_of_day[0])
-        APPEND_FMT(output_buf, offset, "%s%s%s%s%s%s%s%s%s%s%s%s%s%s",
+        APPEND_FMT(output_buf, offset, "%s%s%s%s%s%c%s%c%s%c%s%c%s%s",
                    p->date_header.name,
                    p->date_header.colon_space,
                    p->date_header.wkday,
                    p->date_header.comma_space,
                    p->date_header.day,
-                   &p->date_header.space1,
+                   p->date_header.space1,
                    p->date_header.month,
-                   &p->date_header.space2,
+                   p->date_header.space2,
                    p->date_header.year,
-                   &p->date_header.space3,
+                   p->date_header.space3,
                    p->date_header.time_of_day,
-                   &p->date_header.space4,
+                   p->date_header.space4,
                    p->date_header.gmt,
                    p->date_header.crlf);
 
@@ -967,7 +967,7 @@ int serialize_teardown(const rtsp_teardown_packet_t *p, u8 *output_buf, u32 *out
                    p->authorization_header.credentials,
                    p->authorization_header.crlf);
 
-    if (p->bandwidth_header.name[0] && p->bandwidth_header.value > 0)
+    if (p->bandwidth_header.name[0] && p->bandwidth_header.value >= 0)
         APPEND_FMT(output_buf, offset, "%s%s%d%s",
                    p->bandwidth_header.name,
                    p->bandwidth_header.colon_space,
@@ -1057,19 +1057,19 @@ int serialize_get_parameter(const rtsp_get_parameter_packet_t *p, u8 *output_buf
                    p->connection_header.crlf);
 
     if (p->date_header.name[0] && p->date_header.time_of_day[0])
-        APPEND_FMT(output_buf, offset, "%s%s%s%s%s%s%s%s%s%s%s%s%s%s",
+        APPEND_FMT(output_buf, offset, "%s%s%s%s%s%c%s%c%s%c%s%c%s%s",
                    p->date_header.name,
                    p->date_header.colon_space,
                    p->date_header.wkday,
                    p->date_header.comma_space,
                    p->date_header.day,
-                   &p->date_header.space1,
+                   p->date_header.space1,
                    p->date_header.month,
-                   &p->date_header.space2,
+                   p->date_header.space2,
                    p->date_header.year,
-                   &p->date_header.space3,
+                   p->date_header.space3,
                    p->date_header.time_of_day,
-                   &p->date_header.space4,
+                   p->date_header.space4,
                    p->date_header.gmt,
                    p->date_header.crlf);
 
@@ -1140,7 +1140,7 @@ int serialize_get_parameter(const rtsp_get_parameter_packet_t *p, u8 *output_buf
                    p->content_base_header.uri,
                    p->content_base_header.crlf);
 
-    if (p->content_length_header.name[0] && p->content_length_header.length > 0)
+    if (p->content_length_header.name[0] && p->content_length_header.length >= 0)
         APPEND_FMT(output_buf, offset, "%s%s%d%s",
                    p->content_length_header.name,
                    p->content_length_header.colon_space,
@@ -1162,19 +1162,19 @@ int serialize_get_parameter(const rtsp_get_parameter_packet_t *p, u8 *output_buf
                    p->from_header.crlf);
 
     if (p->last_modified_header.name[0] && p->last_modified_header.time_of_day[0])
-        APPEND_FMT(output_buf, offset, "%s%s%s%s%s%s%s%s%s%s%s%s%s%s",
+        APPEND_FMT(output_buf, offset, "%s%s%s%s%s%c%s%c%s%c%s%c%s%s",
                    p->last_modified_header.name,
                    p->last_modified_header.colon_space,
                    p->last_modified_header.wkday,
                    p->last_modified_header.comma_space,
                    p->last_modified_header.day,
-                   &p->last_modified_header.space1,
+                   p->last_modified_header.space1,
                    p->last_modified_header.month,
-                   &p->last_modified_header.space2,
+                   p->last_modified_header.space2,
                    p->last_modified_header.year,
-                   &p->last_modified_header.space3,
+                   p->last_modified_header.space3,
                    p->last_modified_header.time_of_day,
-                   &p->last_modified_header.space4,
+                   p->last_modified_header.space4,
                    p->last_modified_header.gmt,
                    p->last_modified_header.crlf);
 
@@ -1238,8 +1238,6 @@ int serialize_set_parameter(const rtsp_set_parameter_packet_t *p, u8 *output_buf
     if (p->method[0] && p->request_uri[0] && p->rtsp_version[0] && p->crlf1[0]) {
         APPEND_FMT(output_buf, offset, "%s %s %s%s",
                    p->method, p->request_uri, p->rtsp_version, p->crlf1);
-    } else {
-        return -1;
     }
 
     // === 2. CSeq (mandatory) ===
@@ -1249,8 +1247,6 @@ int serialize_set_parameter(const rtsp_set_parameter_packet_t *p, u8 *output_buf
                    p->cseq_header.colon_space,
                    p->cseq_header.number,
                    p->cseq_header.crlf);
-    } else {
-        return -1;
     }
 
     // === 3. General Headers ===
@@ -1262,19 +1258,19 @@ int serialize_set_parameter(const rtsp_set_parameter_packet_t *p, u8 *output_buf
                    p->connection_header.crlf);
 
     if (p->date_header.name[0] && p->date_header.time_of_day[0])
-        APPEND_FMT(output_buf, offset, "%s%s%s%s%s%s%s%s%s%s%s%s%s%s",
+        APPEND_FMT(output_buf, offset, "%s%s%s%s%s%c%s%c%s%c%s%c%s%s",
                    p->date_header.name,
                    p->date_header.colon_space,
                    p->date_header.wkday,
                    p->date_header.comma_space,
                    p->date_header.day,
-                   &p->date_header.space1,
+                   p->date_header.space1,
                    p->date_header.month,
-                   &p->date_header.space2,
+                   p->date_header.space2,
                    p->date_header.year,
-                   &p->date_header.space3,
+                   p->date_header.space3,
                    p->date_header.time_of_day,
-                   &p->date_header.space4,
+                   p->date_header.space4,
                    p->date_header.gmt,
                    p->date_header.crlf);
 
@@ -1401,7 +1397,20 @@ int serialize_set_parameter(const rtsp_set_parameter_packet_t *p, u8 *output_buf
 
     APPEND_FMT(output_buf, offset, "%s", "\r\n");
 
+     // === 7. Message Body ===
+    if (p->content_length_header.name[0] &&
+        p->content_length_header.length > 0 &&
+        p->body[0]) {
 
+        int body_len = p->content_length_header.length;
+        if (body_len > MAX_RTSP_BODY_LEN)
+            body_len = MAX_RTSP_BODY_LEN;
+
+        if (body_len > 0) {
+            memcpy(output_buf + offset, p->body, (size_t)body_len);
+            offset += (u32)body_len;
+        }
+    }
     *out_len = offset;
     return 0;
 }
@@ -1414,8 +1423,6 @@ int serialize_redirect(const rtsp_redirect_packet_t *p, u8 *output_buf, u32 *out
     if (p->method[0] && p->request_uri[0] && p->rtsp_version[0] && p->crlf1[0]) {
         APPEND_FMT(output_buf, offset, "%s %s %s%s",
                    p->method, p->request_uri, p->rtsp_version, p->crlf1);
-    } else {
-        return -1; // 缺失核心字段
     }
 
     // === 2. CSeq ===
@@ -1425,8 +1432,6 @@ int serialize_redirect(const rtsp_redirect_packet_t *p, u8 *output_buf, u32 *out
                    p->cseq_header.colon_space,
                    p->cseq_header.number,
                    p->cseq_header.crlf);
-    } else {
-        return -1;
     }
 
     // === 3. Connection ===
@@ -1439,19 +1444,19 @@ int serialize_redirect(const rtsp_redirect_packet_t *p, u8 *output_buf, u32 *out
 
     // === 4. Date ===
     if (p->date_header.name[0] && p->date_header.time_of_day[0])
-        APPEND_FMT(output_buf, offset, "%s%s%s%s%s%s%s%s%s%s%s%s%s%s",
+        APPEND_FMT(output_buf, offset, "%s%s%s%s%s%c%s%c%s%c%s%c%s%s",
                    p->date_header.name,
                    p->date_header.colon_space,
                    p->date_header.wkday,
                    p->date_header.comma_space,
                    p->date_header.day,
-                   &p->date_header.space1,
+                   p->date_header.space1,
                    p->date_header.month,
-                   &p->date_header.space2,
+                   p->date_header.space2,
                    p->date_header.year,
-                   &p->date_header.space3,
+                   p->date_header.space3,
                    p->date_header.time_of_day,
-                   &p->date_header.space4,
+                   p->date_header.space4,
                    p->date_header.gmt,
                    p->date_header.crlf);
 
@@ -1487,7 +1492,7 @@ int serialize_redirect(const rtsp_redirect_packet_t *p, u8 *output_buf, u32 *out
                    p->authorization_header.crlf);
 
     // === 8. Bandwidth ===
-    if (p->bandwidth_header.name[0] && p->bandwidth_header.value > 0)
+    if (p->bandwidth_header.name[0] && p->bandwidth_header.value >= 0)
         APPEND_FMT(output_buf, offset, "%s%s%d%s",
                    p->bandwidth_header.name,
                    p->bandwidth_header.colon_space,
@@ -1576,8 +1581,6 @@ int serialize_announce(const rtsp_announce_packet_t *p, u8 *output_buf, u32 *out
     if (p->method[0] && p->request_uri[0] && p->rtsp_version[0] && p->crlf1[0]) {
         APPEND_FMT(output_buf, offset, "%s %s %s%s",
                    p->method, p->request_uri, p->rtsp_version, p->crlf1);
-    } else {
-        return -1;
     }
 
     // === 2. CSeq (mandatory) ===
@@ -1587,10 +1590,7 @@ int serialize_announce(const rtsp_announce_packet_t *p, u8 *output_buf, u32 *out
                    p->cseq_header.colon_space,
                    p->cseq_header.number,
                    p->cseq_header.crlf);
-    } else {
-        return -1;
     }
-
     // === 3. General Headers ===
     if (p->connection_header.name[0] && p->connection_header.option[0])
         APPEND_FMT(output_buf, offset, "%s%s%s%s",
@@ -1600,19 +1600,19 @@ int serialize_announce(const rtsp_announce_packet_t *p, u8 *output_buf, u32 *out
                    p->connection_header.crlf);
 
     if (p->date_header.name[0] && p->date_header.time_of_day[0])
-        APPEND_FMT(output_buf, offset, "%s%s%s%s%s%s%s%s%s%s%s%s%s%s",
+        APPEND_FMT(output_buf, offset, "%s%s%s%s%s%c%s%c%s%c%s%c%s%s",
                    p->date_header.name,
                    p->date_header.colon_space,
                    p->date_header.wkday,
                    p->date_header.comma_space,
                    p->date_header.day,
-                   &p->date_header.space1,
+                   p->date_header.space1,
                    p->date_header.month,
-                   &p->date_header.space2,
+                   p->date_header.space2,
                    p->date_header.year,
-                   &p->date_header.space3,
+                   p->date_header.space3,
                    p->date_header.time_of_day,
-                   &p->date_header.space4,
+                   p->date_header.space4,
                    p->date_header.gmt,
                    p->date_header.crlf);
 
@@ -1743,19 +1743,19 @@ int serialize_announce(const rtsp_announce_packet_t *p, u8 *output_buf, u32 *out
                    p->content_length_header.crlf);
 
     if (p->expires_header.name[0] && p->expires_header.time_of_day[0])
-        APPEND_FMT(output_buf, offset, "%s%s%s%s%s%s%s%s%s%s%s%s%s%s",
+        APPEND_FMT(output_buf, offset, "%s%s%s%s%s%c%s%c%s%c%s%c%s%s",
                    p->expires_header.name,
                    p->expires_header.colon_space,
                    p->expires_header.wkday,
                    p->expires_header.comma_space,
                    p->expires_header.day,
-                   &p->expires_header.space1,
+                   p->expires_header.space1,
                    p->expires_header.month,
-                   &p->expires_header.space2,
+                   p->expires_header.space2,
                    p->expires_header.year,
-                   &p->expires_header.space3,
+                   p->expires_header.space3,
                    p->expires_header.time_of_day,
-                   &p->expires_header.space4,
+                   p->expires_header.space4,
                    p->expires_header.gmt,
                    p->expires_header.crlf);
 
@@ -1763,6 +1763,20 @@ int serialize_announce(const rtsp_announce_packet_t *p, u8 *output_buf, u32 *out
 
     APPEND_FMT(output_buf, offset, "%s", "\r\n");
 
+    // === 7. Message Body ===
+    if (p->content_length_header.name[0] &&
+        p->content_length_header.length > 0 &&
+        p->body[0]) {
+
+        int body_len = p->content_length_header.length;
+        if (body_len > MAX_RTSP_BODY_LEN)
+            body_len = MAX_RTSP_BODY_LEN;
+
+        if (body_len > 0) {
+            memcpy(output_buf + offset, p->body, (size_t)body_len);
+            offset += (u32)body_len;
+        }
+    }
 
     *out_len = offset;
     return 0;
@@ -1775,10 +1789,7 @@ int serialize_record(const rtsp_record_packet_t *p, u8 *output_buf, u32 *out_len
     if (p->method[0] && p->request_uri[0] && p->rtsp_version[0] && p->crlf1[0]) {
         APPEND_FMT(output_buf, offset, "%s %s %s%s",
                    p->method, p->request_uri, p->rtsp_version, p->crlf1);
-    } else {
-        return -1;
     }
-
     // === 2. CSeq (mandatory) ===
     if (p->cseq_header.name[0]) {
         APPEND_FMT(output_buf, offset, "%s%s%d%s",
@@ -1786,8 +1797,6 @@ int serialize_record(const rtsp_record_packet_t *p, u8 *output_buf, u32 *out_len
                    p->cseq_header.colon_space,
                    p->cseq_header.number,
                    p->cseq_header.crlf);
-    } else {
-        return -1;
     }
 
     // === 3. General Headers ===
@@ -1799,19 +1808,19 @@ int serialize_record(const rtsp_record_packet_t *p, u8 *output_buf, u32 *out_len
                    p->connection_header.crlf);
 
     if (p->date_header.name[0] && p->date_header.time_of_day[0])
-        APPEND_FMT(output_buf, offset, "%s%s%s%s%s%s%s%s%s%s%s%s%s%s",
+        APPEND_FMT(output_buf, offset, "%s%s%s%s%s%c%s%c%s%c%s%c%s%s",
                    p->date_header.name,
                    p->date_header.colon_space,
                    p->date_header.wkday,
                    p->date_header.comma_space,
                    p->date_header.day,
-                   &p->date_header.space1,
+                   p->date_header.space1,
                    p->date_header.month,
-                   &p->date_header.space2,
+                   p->date_header.space2,
                    p->date_header.year,
-                   &p->date_header.space3,
+                   p->date_header.space3,
                    p->date_header.time_of_day,
-                   &p->date_header.space4,
+                   p->date_header.space4,
                    p->date_header.gmt,
                    p->date_header.crlf);
 
@@ -1899,16 +1908,14 @@ int serialize_record(const rtsp_record_packet_t *p, u8 *output_buf, u32 *out_len
                    p->user_agent_header.agent_string,
                    p->user_agent_header.crlf);
 
-    if (p->range_header.name[0] && p->range_header.start[0]) {
-        APPEND_FMT(output_buf, offset, "%s%s%s", 
-                   p->range_header.name, 
-                   p->range_header.colon_space, 
-                   p->range_header.start);
-        if (p->range_header.end[0]) {
-            APPEND_FMT(output_buf, offset, "-%s", p->range_header.end);
-        }
-        APPEND_FMT(output_buf, offset, "%s", p->range_header.crlf);
-    }
+    if (p->range_header.name[0] && p->range_header.unit[0])
+        APPEND_FMT(output_buf, offset, "%s%s%s=%s-%s%s",
+                   p->range_header.name,
+                   p->range_header.colon_space,
+                   p->range_header.unit,
+                   p->range_header.start,
+                   p->range_header.end,
+                   p->range_header.crlf);
 
     if (p->scale_header.name[0] && p->scale_header.value != 0.0f) {
         APPEND_FMT(output_buf, offset, "%s%s%.3f%s",

@@ -225,8 +225,19 @@ void fill_date_header(date_header_rtsp_t *hdr, const char *value) {
 
 /* 19. Expires */
 void fill_expires_header(expires_header_rtsp_t *hdr, const char *value) {
-    // 与 Date 格式一致
-    fill_date_header(hdr, value);
+    strcpy(hdr->name, "Expires");
+    strcpy(hdr->colon_space, ": ");
+    strcpy(hdr->crlf, "\r\n");
+
+    // 简单解析 RFC 1123 格式: "Tue, 15 Nov 1994 08:12:31 GMT"
+    sscanf(value, "%3s , %2s %3s %4s %8s %3s",
+           hdr->wkday, hdr->day, hdr->month, hdr->year,
+           hdr->time_of_day, hdr->gmt);
+    strcpy(hdr->comma_space, ", ");
+    hdr->space1 = ' ';
+    hdr->space2 = ' ';
+    hdr->space3 = ' ';
+    hdr->space4 = ' ';
 }
 
 /* 20. From */
@@ -721,6 +732,8 @@ size_t parse_rtsp_msg(const uint8_t *buf, size_t buf_len,
                             fill_bandwidth_header(&pkt->describe.bandwidth_header, value);
                         else if (strcasecmp(name, "Blocksize") == 0)
                             fill_blocksize_header(&pkt->describe.blocksize_header, value);
+                        else if (strcasecmp(name, "Connection") == 0)
+                            fill_connection_header(&pkt->describe.connection_header, value);
                         else if (strcasecmp(name, "Content-Base") == 0)
                             fill_content_base_header(&pkt->describe.content_base_header, value);
                         else if (strcasecmp(name, "Content-Encoding") == 0)
@@ -732,7 +745,9 @@ size_t parse_rtsp_msg(const uint8_t *buf, size_t buf_len,
                         else if (strcasecmp(name, "Content-Location") == 0)
                             fill_content_location_header(&pkt->describe.content_location_header, value);
                         else if (strcasecmp(name, "CSeq") == 0)
-                            fill_cseq_header(&pkt->options.cseq_header, value);
+                            fill_cseq_header(&pkt->describe.cseq_header, value);
+                        else if (strcasecmp(name, "Date") == 0)
+                            fill_date_header(&pkt->describe.date_header, value);
                         else if (strcasecmp(name, "Expires") == 0)
                             fill_expires_header(&pkt->describe.expires_header, value);
                         else if (strcasecmp(name, "From") == 0)
@@ -920,6 +935,8 @@ size_t parse_rtsp_msg(const uint8_t *buf, size_t buf_len,
                             fill_bandwidth_header(&pkt->get_parameter.bandwidth_header, value);
                         else if (strcasecmp(name, "Blocksize") == 0)
                             fill_blocksize_header(&pkt->get_parameter.blocksize_header, value);
+                        else if (strcasecmp(name, "Connection") == 0)
+                            fill_connection_header(&pkt->get_parameter.connection_header, value);
                         else if (strcasecmp(name, "Content-Base") == 0)
                             fill_content_base_header(&pkt->get_parameter.content_base_header, value);
                         else if (strcasecmp(name, "Content-Length") == 0)
@@ -927,7 +944,9 @@ size_t parse_rtsp_msg(const uint8_t *buf, size_t buf_len,
                         else if (strcasecmp(name, "Content-Location") == 0)
                             fill_content_location_header(&pkt->get_parameter.content_location_header, value);
                         else if (strcasecmp(name, "CSeq") == 0)
-                            fill_cseq_header(&pkt->teardown.cseq_header, value);
+                            fill_cseq_header(&pkt->get_parameter.cseq_header, value);
+                        else if (strcasecmp(name, "Date") == 0)
+                            fill_date_header(&pkt->get_parameter.date_header, value);
                         else if (strcasecmp(name, "From") == 0)
                             fill_from_header(&pkt->get_parameter.from_header, value);
                         else if (strcasecmp(name, "Last-Modified") == 0)
@@ -958,6 +977,8 @@ size_t parse_rtsp_msg(const uint8_t *buf, size_t buf_len,
                             fill_bandwidth_header(&pkt->set_parameter.bandwidth_header, value);
                         else if (strcasecmp(name, "Blocksize") == 0)
                             fill_blocksize_header(&pkt->set_parameter.blocksize_header, value);
+                        else if (strcasecmp(name, "Connection") == 0)
+                            fill_connection_header(&pkt->set_parameter.connection_header, value);
                         else if (strcasecmp(name, "Content-Encoding") == 0)
                             fill_content_encoding_header(&pkt->set_parameter.content_encoding_header, value);
                         else if (strcasecmp(name, "Content-Length") == 0)
@@ -965,7 +986,9 @@ size_t parse_rtsp_msg(const uint8_t *buf, size_t buf_len,
                         else if (strcasecmp(name, "Content-Type") == 0)
                             fill_content_type_header(&pkt->set_parameter.content_type_header, value);
                         else if (strcasecmp(name, "CSeq") == 0)
-                            fill_cseq_header(&pkt->teardown.cseq_header, value);
+                            fill_cseq_header(&pkt->set_parameter.cseq_header, value);
+                        else if (strcasecmp(name, "Date") == 0)
+                            fill_date_header(&pkt->set_parameter.date_header, value);
                         else if (strcasecmp(name, "From") == 0)
                             fill_from_header(&pkt->set_parameter.from_header, value);
                         else if (strcasecmp(name, "Proxy-Require") == 0)
@@ -978,6 +1001,8 @@ size_t parse_rtsp_msg(const uint8_t *buf, size_t buf_len,
                             fill_session_header(&pkt->set_parameter.session_header, value);
                         else if (strcasecmp(name, "User-Agent") == 0)
                             fill_user_agent_header(&pkt->set_parameter.user_agent_header, value);
+                        else if (strcasecmp(name, "Via") == 0)
+                            fill_via_header(&pkt->set_parameter.via_header, value);
                     }
 
                     /* ========================
@@ -993,7 +1018,11 @@ size_t parse_rtsp_msg(const uint8_t *buf, size_t buf_len,
                         else if (strcasecmp(name, "Blocksize") == 0)
                             fill_blocksize_header(&pkt->redirect.blocksize_header, value);
                         else if (strcasecmp(name, "CSeq") == 0)
-                            fill_cseq_header(&pkt->teardown.cseq_header, value);
+                            fill_cseq_header(&pkt->redirect.cseq_header, value);
+                        else if (strcasecmp(name, "Connection") == 0)
+                            fill_connection_header(&pkt->redirect.connection_header, value);
+                        else if (strcasecmp(name, "Date") == 0)
+                            fill_date_header(&pkt->redirect.date_header, value);
                         else if (strcasecmp(name, "From") == 0)
                             fill_from_header(&pkt->redirect.from_header, value);
                         else if (strcasecmp(name, "Proxy-Require") == 0)
@@ -1006,6 +1035,8 @@ size_t parse_rtsp_msg(const uint8_t *buf, size_t buf_len,
                             fill_session_header(&pkt->redirect.session_header, value);
                         else if (strcasecmp(name, "User-Agent") == 0)
                             fill_user_agent_header(&pkt->redirect.user_agent_header, value);
+                        else if (strcasecmp(name, "Via") == 0)
+                            fill_via_header(&pkt->redirect.via_header, value);
                     }
 
                     /* ========================
@@ -1029,7 +1060,11 @@ size_t parse_rtsp_msg(const uint8_t *buf, size_t buf_len,
                         else if (strcasecmp(name, "Content-Type") == 0)
                             fill_content_type_header(&pkt->announce.content_type_header, value);
                         else if (strcasecmp(name, "CSeq") == 0)
-                            fill_cseq_header(&pkt->teardown.cseq_header, value);
+                            fill_cseq_header(&pkt->announce.cseq_header, value);
+                        else if (strcasecmp(name, "Connection") == 0)
+                            fill_connection_header(&pkt->announce.connection_header, value);
+                        else if (strcasecmp(name, "Date") == 0)
+                            fill_date_header(&pkt->announce.date_header, value);
                         else if (strcasecmp(name, "Expires") == 0)
                             fill_expires_header(&pkt->announce.expires_header, value);
                         else if (strcasecmp(name, "From") == 0)
@@ -1044,6 +1079,8 @@ size_t parse_rtsp_msg(const uint8_t *buf, size_t buf_len,
                             fill_session_header(&pkt->announce.session_header, value);
                         else if (strcasecmp(name, "User-Agent") == 0)
                             fill_user_agent_header(&pkt->announce.user_agent_header, value);
+                        else if (strcasecmp(name, "Via") == 0)
+                            fill_via_header(&pkt->announce.via_header, value);
                     }
 
                     /* ========================
@@ -1059,7 +1096,11 @@ size_t parse_rtsp_msg(const uint8_t *buf, size_t buf_len,
                         else if (strcasecmp(name, "Blocksize") == 0)
                             fill_blocksize_header(&pkt->record.blocksize_header, value);
                         else if (strcasecmp(name, "CSeq") == 0)
-                            fill_cseq_header(&pkt->teardown.cseq_header, value);
+                            fill_cseq_header(&pkt->record.cseq_header, value);
+                        else if (strcasecmp(name, "Connection") == 0)
+                            fill_connection_header(&pkt->record.connection_header, value);
+                        else if (strcasecmp(name, "Date") == 0)
+                            fill_date_header(&pkt->record.date_header, value);
                         else if (strcasecmp(name, "From") == 0)
                             fill_from_header(&pkt->record.from_header, value);
                         else if (strcasecmp(name, "Proxy-Require") == 0)
@@ -1076,6 +1117,8 @@ size_t parse_rtsp_msg(const uint8_t *buf, size_t buf_len,
                             fill_session_header(&pkt->record.session_header, value);
                         else if (strcasecmp(name, "User-Agent") == 0)
                             fill_user_agent_header(&pkt->record.user_agent_header, value);
+                        else if (strcasecmp(name, "Via") == 0)
+                            fill_via_header(&pkt->record.via_header, value);
                     }
                 }
             }
@@ -1125,639 +1168,639 @@ size_t parse_rtsp_msg(const uint8_t *buf, size_t buf_len,
 }
 
 
-#include <stdio.h>
-#include <string.h>
-#include <stdbool.h>
-
-/* --------- helpers --------- */
-static inline bool hdr_present(const char *name) {
-    return name && name[0] != '\0';
-}
-
-static void print_date_like(const char *name_prefix,
-                            const date_header_rtsp_t *h) {
-    if (!hdr_present(h->name)) return;
-    /* 组合：Wkday, DD Mon YYYY HH:MM:SS GMT */
-    printf("    %s%s%s%s%s %s %s %s %s\n",
-           h->name, h->colon_space,
-           h->wkday, h->comma_space, h->day,
-           h->month, h->year, h->time_of_day, h->gmt);
-}
-
-/* --------- individual header printers used by OPTIONS --------- */
-
-static void print_cseq(const cseq_header_rtsp_t *h) {
-    if (!hdr_present(h->name)) return;
-    printf("    %s%s%d\n", h->name, h->colon_space, h->number);
-}
-
-static void print_connection(const connection_header_rtsp_t *h) {
-    if (!hdr_present(h->name)) return;
-    printf("    %s%s%s\n", h->name, h->colon_space, h->option);
-}
-
-static void print_via(const via_header_rtsp_t *h) {
-    if (!hdr_present(h->name)) return;
-    printf("    %s%s%s %s\n", h->name, h->colon_space, h->protocol, h->host);
-}
-
-static void print_accept_language(const accept_language_header_rtsp_t *h) {
-    if (!hdr_present(h->name)) return;
-    printf("    %s%s", h->name, h->colon_space);
-    for (int i = 0; i < h->entry_count; i++) {
-        const char *tag = h->entries[i].language_tag;
-        const char *qv  = h->entries[i].qvalue;
-        if (tag && tag[0]) {
-            printf("%s", tag);
-            if (qv && qv[0]) printf(";q=%s", qv);
-            if (i < h->entry_count - 1) printf(", ");
-        }
-    }
-    printf("\n");
-}
-
-static void print_authorization(const authorization_header_rtsp_t *h) {
-    if (!hdr_present(h->name)) return;
-    /* "Authorization: <type> <credentials>" */
-    printf("    %s%s%s%c%s\n",
-           h->name, h->colon_space, h->auth_type, h->space, h->credentials);
-}
-
-static void print_bandwidth(const bandwidth_header_rtsp_t *h) {
-    if (!hdr_present(h->name)) return;
-    printf("    %s%s%d\n", h->name, h->colon_space, h->value);
-}
-
-static void print_from(const from_header_rtsp_t *h) {
-    if (!hdr_present(h->name)) return;
-    printf("    %s%s%s\n", h->name, h->colon_space, h->uri);
-}
-
-static void print_proxy_require(const proxy_require_header_rtsp_t *h) {
-    if (!hdr_present(h->name)) return;
-    printf("    %s%s%s\n", h->name, h->colon_space, h->option_tag);
-}
-
-static void print_referer(const referer_header_rtsp_t *h) {
-    if (!hdr_present(h->name)) return;
-    printf("    %s%s%s\n", h->name, h->colon_space, h->uri);
-}
-
-static void print_require(const require_header_rtsp_t *h) {
-    if (!hdr_present(h->name)) return;
-    printf("    %s%s%s\n", h->name, h->colon_space, h->option_tag);
-}
-
-static void print_user_agent(const user_agent_header_rtsp_t *h) {
-    if (!hdr_present(h->name)) return;
-    printf("    %s%s%s\n", h->name, h->colon_space, h->agent_string);
-}
-
-/* --------- grouped printers --------- */
-
-static void print_common_headers_for_options(const rtsp_options_packet_t *p) {
-    /* General headers */
-    print_cseq(&p->cseq_header);
-    print_connection(&p->connection_header);
-    print_date_like("Date", &p->date_header);
-    print_via(&p->via_header);
-}
-
-static void print_request_headers_for_options(const rtsp_options_packet_t *p) {
-    /* Request headers present in OPTIONS */
-    print_accept_language(&p->accept_language_header);
-    print_authorization(&p->authorization_header);
-    print_bandwidth(&p->bandwidth_header);
-    print_from(&p->from_header);
-    print_proxy_require(&p->proxy_require_header);
-    print_referer(&p->referer_header);
-    print_require(&p->require_header);
-    print_user_agent(&p->user_agent_header);
-}
-
-/* --------- entry used by your switch-case --------- */
-
-static void print_headers_for_options(const rtsp_options_packet_t *pkt) {
-    print_common_headers_for_options(pkt);
-    print_request_headers_for_options(pkt);
-}
-
-/* ===================== DESCRIBE ===================== */
-
-/* ---- headers unique to / newly used in DESCRIBE ---- */
-static void print_accept(const accept_header_rtsp_t *h) {
-    if (!hdr_present(h->name)) return;
-    printf("    %s%s%s%c%s\n", h->name, h->colon_space, h->media_type, h->slash, h->sub_type);
-}
-
-static void print_accept_encoding(const accept_encoding_header_rtsp_t *h) {
-    if (!hdr_present(h->name)) return;
-    printf("    %s%s%s\n", h->name, h->colon_space, h->encoding);
-}
-
-static void print_content_base(const content_base_header_rtsp_t *h) {
-    if (!hdr_present(h->name)) return;
-    printf("    %s%s%s\n", h->name, h->colon_space, h->uri);
-}
-
-static void print_content_encoding(const content_encoding_header_rtsp_t *h) {
-    if (!hdr_present(h->name)) return;
-    printf("    %s%s%s\n", h->name, h->colon_space, h->encoding);
-}
-
-static void print_content_language(const content_language_header_rtsp_t *h) {
-    if (!hdr_present(h->name)) return;
-    printf("    %s%s%s\n", h->name, h->colon_space, h->language);
-}
-
-static void print_content_length(const content_length_header_rtsp_t *h) {
-    if (!hdr_present(h->name)) return;
-    printf("    %s%s%d\n", h->name, h->colon_space, h->length);
-}
-
-static void print_content_location(const content_location_header_rtsp_t *h) {
-    if (!hdr_present(h->name)) return;
-    printf("    %s%s%s\n", h->name, h->colon_space, h->uri);
-}
-
-static void print_session(const session_header_rtsp_t *h) {
-    if (!hdr_present(h->name)) return;
-    /* 既支持无 timeout，也支持 ";timeout=" 数值（当 semicolon_timeout 非空时打印） */
-    if (h->semicolon_timeout[0] != '\0') {
-        printf("    %s%s%s%s%d\n", h->name, h->colon_space, h->session_id, h->semicolon_timeout, h->timeout);
-    } else {
-        printf("    %s%s%s\n", h->name, h->colon_space, h->session_id);
-    }
-}
-
-/* ---- grouped printers for DESCRIBE ---- */
-static void print_common_headers_for_describe(const rtsp_describe_packet_t *p) {
-    print_cseq(&p->cseq_header);
-    print_connection(&p->connection_header);
-    print_date_like("Date", &p->date_header);
-    print_via(&p->via_header);
-}
-
-static void print_request_headers_for_describe(const rtsp_describe_packet_t *p) {
-    print_accept(&p->accept_header);
-    print_accept_encoding(&p->accept_encoding_header);
-    print_accept_language(&p->accept_language_header);
-    print_authorization(&p->authorization_header);
-    print_bandwidth(&p->bandwidth_header);
-    /* optional blocksize */
-    if (hdr_present(p->blocksize_header.name))
-        printf("    %s%s%d\n", p->blocksize_header.name, p->blocksize_header.colon_space, p->blocksize_header.value);
-
-    print_content_base(&p->content_base_header);
-    print_content_encoding(&p->content_encoding_header);
-    print_content_language(&p->content_language_header);
-    print_content_length(&p->content_length_header);
-    print_content_location(&p->content_location_header);
-
-    /* date-like: Expires / If-Modified-Since / Last-Modified */
-    print_date_like("Expires", &p->expires_header);
-    print_date_like("If-Modified-Since", &p->if_modified_since_header);
-    print_date_like("Last-Modified", &p->last_modified_header);
-
-    print_from(&p->from_header);
-    print_proxy_require(&p->proxy_require_header);
-    print_referer(&p->referer_header);
-    print_require(&p->require_header);
-    print_session(&p->session_header);
-    print_user_agent(&p->user_agent_header);
-}
-
-static void print_headers_for_describe(const rtsp_describe_packet_t *pkt) {
-    print_common_headers_for_describe(pkt);
-    print_request_headers_for_describe(pkt);
-}
-
-
-/* ===================== SETUP ===================== */
-
-/* ---- headers unique to / newly used in SETUP ---- */
-static void print_transport(const transport_header_rtsp_t *h) {
-    if (!hdr_present(h->name)) return;
-    /* 形如：Transport: RTP/AVP;unicast;client_port=8000-8001 */
-    printf("    %s%s%s%c%s%c%s%s%s\n",
-           h->name, h->colon_space,
-           h->protocol, h->semicolon1,
-           h->cast_mode, h->semicolon2,
-           h->client_port_prefix, h->port_range, "");
-}
-
-static void print_cache_control(const cache_control_header_rtsp_t *h) {
-    if (!hdr_present(h->name)) return;
-    printf("    %s%s%s\n", h->name, h->colon_space, h->directive);
-}
-
-static void print_conference(const conference_header_rtsp_t *h) {
-    if (!hdr_present(h->name)) return;
-    printf("    %s%s%s\n", h->name, h->colon_space, h->conference_id);
-}
-
-/* ---- grouped printers for SETUP ---- */
-static void print_common_headers_for_setup(const rtsp_setup_packet_t *p) {
-    print_cseq(&p->cseq_header);
-    print_connection(&p->connection_header);
-    print_date_like("Date", &p->date_header);
-    print_via(&p->via_header);
-}
-
-static void print_request_headers_for_setup(const rtsp_setup_packet_t *p) {
-    print_accept_language(&p->accept_language_header);
-    print_authorization(&p->authorization_header);
-    print_bandwidth(&p->bandwidth_header);
-
-    if (hdr_present(p->blocksize_header.name))
-        printf("    %s%s%d\n", p->blocksize_header.name, p->blocksize_header.colon_space, p->blocksize_header.value);
-
-    print_cache_control(&p->cache_control_header);
-    print_conference(&p->conference_header);
-    print_from(&p->from_header);
-    print_date_like("If-Modified-Since", &p->if_modified_since_header);
-    print_proxy_require(&p->proxy_require_header);
-    print_referer(&p->referer_header);
-    print_require(&p->require_header);
-
-    /* mandatory */
-    print_transport(&p->transport_header);
-
-    print_user_agent(&p->user_agent_header);
-}
-
-static void print_headers_for_setup(const rtsp_setup_packet_t *pkt) {
-    print_common_headers_for_setup(pkt);
-    print_request_headers_for_setup(pkt);
-}
-
-/* ===================== PLAY / PAUSE / TEARDOWN ===================== */
-
-/* ---- headers newly used here ---- */
-static void print_blocksize(const blocksize_header_rtsp_t *h) {
-    if (!hdr_present(h->name)) return;
-    printf("    %s%s%d\n", h->name, h->colon_space, h->value);
-}
-
-static void print_range(const range_header_rtsp_t *h) {
-    if (!hdr_present(h->name)) return;
-    /* 例: Range: npt=0-7.741 */
-    printf("    %s%s%s%c%s%c%s\n",
-           h->name, h->colon_space,
-           h->unit, h->equals, h->start, h->dash, h->end);
-}
-
-static void print_scale(const scale_header_rtsp_t *h) {
-    if (!hdr_present(h->name)) return;
-    printf("    %s%s%.3f\n", h->name, h->colon_space, h->value);
-}
-
-static void print_speed(const speed_header_rtsp_t *h) {
-    if (!hdr_present(h->name)) return;
-    printf("    %s%s%.3f\n", h->name, h->colon_space, h->value);
-}
-
-/* -------------------- PLAY -------------------- */
-static void print_common_headers_for_play(const rtsp_play_packet_t *p) {
-    print_cseq(&p->cseq_header);
-    print_connection(&p->connection_header);
-    print_date_like("Date", &p->date_header);
-    print_via(&p->via_header);
-}
-
-static void print_request_headers_for_play(const rtsp_play_packet_t *p) {
-    print_accept_language(&p->accept_language_header);
-    print_authorization(&p->authorization_header);
-    print_bandwidth(&p->bandwidth_header);
-    print_blocksize(&p->blocksize_header);
-    print_from(&p->from_header);
-    print_proxy_require(&p->proxy_require_header);
-    print_range(&p->range_header);
-    print_referer(&p->referer_header);
-    print_require(&p->require_header);
-    print_scale(&p->scale_header);
-    print_session(&p->session_header);
-    print_speed(&p->speed_header);
-    print_user_agent(&p->user_agent_header);
-}
-
-static void print_headers_for_play(const rtsp_play_packet_t *pkt) {
-    print_common_headers_for_play(pkt);
-    print_request_headers_for_play(pkt);
-}
-
-/* -------------------- PAUSE -------------------- */
-static void print_common_headers_for_pause(const rtsp_pause_packet_t *p) {
-    print_cseq(&p->cseq_header);
-    print_connection(&p->connection_header);
-    print_date_like("Date", &p->date_header);
-    print_via(&p->via_header);
-}
-
-static void print_request_headers_for_pause(const rtsp_pause_packet_t *p) {
-    print_accept_language(&p->accept_language_header);
-    print_authorization(&p->authorization_header);
-    print_bandwidth(&p->bandwidth_header);
-    print_blocksize(&p->blocksize_header);
-    print_from(&p->from_header);
-    print_proxy_require(&p->proxy_require_header);
-    print_range(&p->range_header);
-    print_referer(&p->referer_header);
-    print_require(&p->require_header);
-    print_session(&p->session_header);
-    print_user_agent(&p->user_agent_header);
-}
-
-static void print_headers_for_pause(const rtsp_pause_packet_t *pkt) {
-    print_common_headers_for_pause(pkt);
-    print_request_headers_for_pause(pkt);
-}
-
-/* -------------------- TEARDOWN -------------------- */
-static void print_common_headers_for_teardown(const rtsp_teardown_packet_t *p) {
-    print_cseq(&p->cseq_header);
-    print_connection(&p->connection_header);
-    print_date_like("Date", &p->date_header);
-    print_via(&p->via_header);
-}
-
-static void print_request_headers_for_teardown(const rtsp_teardown_packet_t *p) {
-    print_accept_language(&p->accept_language_header);
-    print_authorization(&p->authorization_header);
-    print_bandwidth(&p->bandwidth_header);
-    print_from(&p->from_header);
-    print_proxy_require(&p->proxy_require_header);
-    print_referer(&p->referer_header);
-    print_require(&p->require_header);
-    print_session(&p->session_header);
-    print_user_agent(&p->user_agent_header);
-}
-
-static void print_headers_for_teardown(const rtsp_teardown_packet_t *pkt) {
-    print_common_headers_for_teardown(pkt);
-    print_request_headers_for_teardown(pkt);
-}
-
-/* ===================== GET_PARAMETER ===================== */
-static void print_common_headers_for_get_parameter(const rtsp_get_parameter_packet_t *p) {
-    print_cseq(&p->cseq_header);
-    print_connection(&p->connection_header);
-    print_date_like("Date", &p->date_header);
-    print_via(&p->via_header);
-}
-
-static void print_request_headers_for_get_parameter(const rtsp_get_parameter_packet_t *p) {
-    print_accept(&p->accept_header);
-    print_accept_encoding(&p->accept_encoding_header);
-    print_accept_language(&p->accept_language_header);
-    print_authorization(&p->authorization_header);
-    print_bandwidth(&p->bandwidth_header);
-    print_blocksize(&p->blocksize_header);
-    print_content_base(&p->content_base_header);
-    print_content_length(&p->content_length_header);
-    print_content_location(&p->content_location_header);
-    print_from(&p->from_header);
-    print_date_like("Last-Modified", &p->last_modified_header);
-    print_proxy_require(&p->proxy_require_header);
-    print_referer(&p->referer_header);
-    print_require(&p->require_header);
-    print_session(&p->session_header);
-    print_user_agent(&p->user_agent_header);
-}
-
-static void print_headers_for_get_parameter(const rtsp_get_parameter_packet_t *pkt) {
-    print_common_headers_for_get_parameter(pkt);
-    print_request_headers_for_get_parameter(pkt);
-}
-
-/* content-type: "Content-Type: <media_type>/<sub_type>" */
-static void print_content_type(const content_type_header_rtsp_t *h) {
-    if (!hdr_present(h->name)) return;
-    printf("    %s%s%s%c%s\n",
-           h->name, h->colon_space,
-           h->media_type, h->slash, h->sub_type);
-}
-
-/* ===================== SET_PARAMETER ===================== */
-static void print_common_headers_for_set_parameter(const rtsp_set_parameter_packet_t *p) {
-    print_cseq(&p->cseq_header);
-    print_connection(&p->connection_header);
-    print_date_like("Date", &p->date_header);
-    print_via(&p->via_header);
-}
-
-static void print_request_headers_for_set_parameter(const rtsp_set_parameter_packet_t *p) {
-    print_accept_language(&p->accept_language_header);
-    print_authorization(&p->authorization_header);
-    print_bandwidth(&p->bandwidth_header);
-    print_blocksize(&p->blocksize_header);
-    print_content_encoding(&p->content_encoding_header);
-    print_content_length(&p->content_length_header);
-    print_content_type(&p->content_type_header);
-    print_from(&p->from_header);
-    print_proxy_require(&p->proxy_require_header);
-    print_referer(&p->referer_header);
-    print_require(&p->require_header);
-    print_session(&p->session_header);
-    print_user_agent(&p->user_agent_header);
-
-    /* 打印 body（假设 body 是 \0 结尾字符串，否则需用长度参数） */
-    if (p->body[0] != '\0') {
-        printf("    Body: %s\n", p->body);
-    }
-}
-
-static void print_headers_for_set_parameter(const rtsp_set_parameter_packet_t *pkt) {
-    print_common_headers_for_set_parameter(pkt);
-    print_request_headers_for_set_parameter(pkt);
-}
-
-/* ===================== REDIRECT ===================== */
-static void print_common_headers_for_redirect(const rtsp_redirect_packet_t *p) {
-    print_cseq(&p->cseq_header);
-    print_connection(&p->connection_header);
-    print_date_like("Date", &p->date_header);
-    print_via(&p->via_header);
-}
-
-static void print_request_headers_for_redirect(const rtsp_redirect_packet_t *p) {
-    print_accept_language(&p->accept_language_header);
-    print_authorization(&p->authorization_header);
-    print_bandwidth(&p->bandwidth_header);
-    print_blocksize(&p->blocksize_header);
-    print_from(&p->from_header);
-    print_proxy_require(&p->proxy_require_header);
-    print_referer(&p->referer_header);
-    print_require(&p->require_header);
-    print_session(&p->session_header);
-    print_user_agent(&p->user_agent_header);
-}
-
-static void print_headers_for_redirect(const rtsp_redirect_packet_t *pkt) {
-    print_common_headers_for_redirect(pkt);
-    print_request_headers_for_redirect(pkt);
-}
-
-/* ===================== ANNOUNCE ===================== */
-static void print_common_headers_for_announce(const rtsp_announce_packet_t *p) {
-    print_cseq(&p->cseq_header);
-    print_connection(&p->connection_header);
-    print_date_like("Date", &p->date_header);
-    print_via(&p->via_header);
-}
-
-static void print_request_headers_for_announce(const rtsp_announce_packet_t *p) {
-    print_accept_language(&p->accept_language_header);
-    print_authorization(&p->authorization_header);
-    print_bandwidth(&p->bandwidth_header);
-    print_blocksize(&p->blocksize_header);
-    print_content_encoding(&p->content_encoding_header);
-    print_content_language(&p->content_language_header);
-    print_content_length(&p->content_length_header);
-    print_content_type(&p->content_type_header);
-    print_date_like("Expires", &p->expires_header);
-    print_from(&p->from_header);
-    print_proxy_require(&p->proxy_require_header);
-    print_referer(&p->referer_header);
-    print_require(&p->require_header);
-    print_session(&p->session_header);
-    print_user_agent(&p->user_agent_header);
-
-    if (p->body[0] != '\0') {
-        printf("    Body: %s\n", p->body);
-    }
-}
-
-static void print_headers_for_announce(const rtsp_announce_packet_t *pkt) {
-    print_common_headers_for_announce(pkt);
-    print_request_headers_for_announce(pkt);
-}
-
-/* ===================== RECORD ===================== */
-static void print_common_headers_for_record(const rtsp_record_packet_t *p) {
-    print_cseq(&p->cseq_header);
-    print_connection(&p->connection_header);
-    print_date_like("Date", &p->date_header);
-    print_via(&p->via_header);
-}
-
-static void print_request_headers_for_record(const rtsp_record_packet_t *p) {
-    print_accept_language(&p->accept_language_header);
-    print_authorization(&p->authorization_header);
-    print_bandwidth(&p->bandwidth_header);
-    print_blocksize(&p->blocksize_header);
-    print_from(&p->from_header);
-    print_proxy_require(&p->proxy_require_header);
-    print_range(&p->range_header);
-    print_referer(&p->referer_header);
-    print_require(&p->require_header);
-    print_scale(&p->scale_header);
-    print_session(&p->session_header);
-    print_user_agent(&p->user_agent_header);
-}
-
-static void print_headers_for_record(const rtsp_record_packet_t *pkt) {
-    print_common_headers_for_record(pkt);
-    print_request_headers_for_record(pkt);
-}
-
-
-void print_rtsp_packets(const rtsp_packet_t *packets, size_t count) {
-    for (size_t i = 0; i < count; i++) {
-        const rtsp_packet_t *pkt = &packets[i];
-        printf("Packet %zu:\n", i + 1);
-        switch (pkt->type) {
-            case RTSP_TYPE_OPTIONS:
-                printf("  Type: OPTIONS\n");
-                printf("  Method: %s\n", pkt->options.method);
-                printf("  Request URI: %s\n", pkt->options.request_uri);
-                printf("  RTSP Version: %s\n", pkt->options.rtsp_version);
-                print_headers_for_options(&pkt->options);
-                // Print other headers...
-                break;
-            case RTSP_TYPE_DESCRIBE:
-                printf("  Type: DESCRIBE\n");
-                printf("  Method: %s\n", pkt->describe.method);
-                printf("  Request URI: %s\n", pkt->describe.request_uri);
-                printf("  RTSP Version: %s\n", pkt->describe.rtsp_version);
-                print_headers_for_describe(&pkt->describe);
-                // Print other headers...
-                break;
-            case RTSP_TYPE_SETUP:
-                printf("  Type: SETUP\n");
-                printf("  Method: %s\n", pkt->setup.method);
-                printf("  Request URI: %s\n", pkt->setup.request_uri);
-                printf("  RTSP Version: %s\n", pkt->setup.rtsp_version);
-                print_headers_for_setup(&pkt->setup);
-                // Print other headers...
-                break;
-            case RTSP_TYPE_PLAY:
-                printf("  Type: PLAY\n");
-                printf("  Method: %s\n", pkt->play.method);
-                printf("  Request URI: %s\n", pkt->play.request_uri);
-                printf("  RTSP Version: %s\n", pkt->play.rtsp_version);
-                print_headers_for_play(&pkt->play);
-                // Print other headers...
-                break;
-            case RTSP_TYPE_PAUSE:
-                printf("  Type: PAUSE\n");
-                printf("  Method: %s\n", pkt->pause.method);
-                printf("  Request URI: %s\n", pkt->pause.request_uri);
-                printf("  RTSP Version: %s\n", pkt->pause.rtsp_version);
-                print_headers_for_pause(&pkt->pause);
-                // Print other headers...
-                break;
-            case RTSP_TYPE_TEARDOWN:
-                printf("  Type: TEARDOWN\n");
-                printf("  Method: %s\n", pkt->teardown.method);
-                printf("  Request URI: %s\n", pkt->teardown.request_uri);
-                printf("  RTSP Version: %s\n", pkt->teardown.rtsp_version);
-                print_headers_for_teardown(&pkt->teardown);
-                // Print other headers...
-                break;
-            case RTSP_TYPE_GET_PARAMETER:
-                printf("  Type: GET_PARAMETER\n");
-                printf("  Method: %s\n", pkt->get_parameter.method);
-                printf("  Request URI: %s\n", pkt->get_parameter.request_uri);
-                printf("  RTSP Version: %s\n", pkt->get_parameter.rtsp_version);
-                print_headers_for_get_parameter(&pkt->get_parameter);
-                // Print other headers...
-                break;
-            case RTSP_TYPE_SET_PARAMETER:
-                printf("  Type: SET_PARAMETER\n");
-                printf("  Method: %s\n", pkt->set_parameter.method);
-                printf("  Request URI: %s\n", pkt->set_parameter.request_uri);
-                printf("  RTSP Version: %s\n", pkt->set_parameter.rtsp_version);
-                print_headers_for_set_parameter(&pkt->set_parameter);
-                // Print other headers...
-                break;
-            case RTSP_TYPE_REDIRECT:
-                printf("  Type: REDIRECT\n");
-                printf("  Method: %s\n", pkt->redirect.method);
-                printf("  Request URI: %s\n", pkt->redirect.request_uri);
-                printf("  RTSP Version: %s\n", pkt->redirect.rtsp_version);
-                print_headers_for_redirect(&pkt->redirect);
-                // Print other headers...
-                break;
-            case RTSP_TYPE_ANNOUNCE:
-                printf("  Type: ANNOUNCE\n");
-                printf("  Method: %s\n", pkt->announce.method);
-                printf("  Request URI: %s\n", pkt->announce.request_uri);
-                printf("  RTSP Version: %s\n", pkt->announce.rtsp_version);
-                print_headers_for_announce(&pkt->announce);
-                // Print other headers...
-                break;
-            case RTSP_TYPE_RECORD:
-                printf("  Type: RECORD\n");
-                printf("  Method: %s\n", pkt->record.method);
-                printf("  Request URI: %s\n", pkt->record.request_uri);
-                printf("  RTSP Version: %s\n", pkt->record.rtsp_version);
-                print_headers_for_record(&pkt->record);
-                // Print other headers...
-                break;
-            default:
-                printf("  Unknown type!\n");
-        }
-        printf("\n");
-    }
-}
+// #include <stdio.h>
+// #include <string.h>
+// #include <stdbool.h>
+
+// /* --------- helpers --------- */
+// static inline bool hdr_present(const char *name) {
+//     return name && name[0] != '\0';
+// }
+
+// static void print_date_like(const char *name_prefix,
+//                             const date_header_rtsp_t *h) {
+//     if (!hdr_present(h->name)) return;
+//     /* 组合：Wkday, DD Mon YYYY HH:MM:SS GMT */
+//     printf("    %s%s%s%s%s %s %s %s %s\n",
+//            h->name, h->colon_space,
+//            h->wkday, h->comma_space, h->day,
+//            h->month, h->year, h->time_of_day, h->gmt);
+// }
+
+// /* --------- individual header printers used by OPTIONS --------- */
+
+// static void print_cseq(const cseq_header_rtsp_t *h) {
+//     if (!hdr_present(h->name)) return;
+//     printf("    %s%s%d\n", h->name, h->colon_space, h->number);
+// }
+
+// static void print_connection(const connection_header_rtsp_t *h) {
+//     if (!hdr_present(h->name)) return;
+//     printf("    %s%s%s\n", h->name, h->colon_space, h->option);
+// }
+
+// static void print_via(const via_header_rtsp_t *h) {
+//     if (!hdr_present(h->name)) return;
+//     printf("    %s%s%s %s\n", h->name, h->colon_space, h->protocol, h->host);
+// }
+
+// static void print_accept_language(const accept_language_header_rtsp_t *h) {
+//     if (!hdr_present(h->name)) return;
+//     printf("    %s%s", h->name, h->colon_space);
+//     for (int i = 0; i < h->entry_count; i++) {
+//         const char *tag = h->entries[i].language_tag;
+//         const char *qv  = h->entries[i].qvalue;
+//         if (tag && tag[0]) {
+//             printf("%s", tag);
+//             if (qv && qv[0]) printf(";q=%s", qv);
+//             if (i < h->entry_count - 1) printf(", ");
+//         }
+//     }
+//     printf("\n");
+// }
+
+// static void print_authorization(const authorization_header_rtsp_t *h) {
+//     if (!hdr_present(h->name)) return;
+//     /* "Authorization: <type> <credentials>" */
+//     printf("    %s%s%s%c%s\n",
+//            h->name, h->colon_space, h->auth_type, h->space, h->credentials);
+// }
+
+// static void print_bandwidth(const bandwidth_header_rtsp_t *h) {
+//     if (!hdr_present(h->name)) return;
+//     printf("    %s%s%d\n", h->name, h->colon_space, h->value);
+// }
+
+// static void print_from(const from_header_rtsp_t *h) {
+//     if (!hdr_present(h->name)) return;
+//     printf("    %s%s%s\n", h->name, h->colon_space, h->uri);
+// }
+
+// static void print_proxy_require(const proxy_require_header_rtsp_t *h) {
+//     if (!hdr_present(h->name)) return;
+//     printf("    %s%s%s\n", h->name, h->colon_space, h->option_tag);
+// }
+
+// static void print_referer(const referer_header_rtsp_t *h) {
+//     if (!hdr_present(h->name)) return;
+//     printf("    %s%s%s\n", h->name, h->colon_space, h->uri);
+// }
+
+// static void print_require(const require_header_rtsp_t *h) {
+//     if (!hdr_present(h->name)) return;
+//     printf("    %s%s%s\n", h->name, h->colon_space, h->option_tag);
+// }
+
+// static void print_user_agent(const user_agent_header_rtsp_t *h) {
+//     if (!hdr_present(h->name)) return;
+//     printf("    %s%s%s\n", h->name, h->colon_space, h->agent_string);
+// }
+
+// /* --------- grouped printers --------- */
+
+// static void print_common_headers_for_options(const rtsp_options_packet_t *p) {
+//     /* General headers */
+//     print_cseq(&p->cseq_header);
+//     print_connection(&p->connection_header);
+//     print_date_like("Date", &p->date_header);
+//     print_via(&p->via_header);
+// }
+
+// static void print_request_headers_for_options(const rtsp_options_packet_t *p) {
+//     /* Request headers present in OPTIONS */
+//     print_accept_language(&p->accept_language_header);
+//     print_authorization(&p->authorization_header);
+//     print_bandwidth(&p->bandwidth_header);
+//     print_from(&p->from_header);
+//     print_proxy_require(&p->proxy_require_header);
+//     print_referer(&p->referer_header);
+//     print_require(&p->require_header);
+//     print_user_agent(&p->user_agent_header);
+// }
+
+// /* --------- entry used by your switch-case --------- */
+
+// static void print_headers_for_options(const rtsp_options_packet_t *pkt) {
+//     print_common_headers_for_options(pkt);
+//     print_request_headers_for_options(pkt);
+// }
+
+// /* ===================== DESCRIBE ===================== */
+
+// /* ---- headers unique to / newly used in DESCRIBE ---- */
+// static void print_accept(const accept_header_rtsp_t *h) {
+//     if (!hdr_present(h->name)) return;
+//     printf("    %s%s%s%c%s\n", h->name, h->colon_space, h->media_type, h->slash, h->sub_type);
+// }
+
+// static void print_accept_encoding(const accept_encoding_header_rtsp_t *h) {
+//     if (!hdr_present(h->name)) return;
+//     printf("    %s%s%s\n", h->name, h->colon_space, h->encoding);
+// }
+
+// static void print_content_base(const content_base_header_rtsp_t *h) {
+//     if (!hdr_present(h->name)) return;
+//     printf("    %s%s%s\n", h->name, h->colon_space, h->uri);
+// }
+
+// static void print_content_encoding(const content_encoding_header_rtsp_t *h) {
+//     if (!hdr_present(h->name)) return;
+//     printf("    %s%s%s\n", h->name, h->colon_space, h->encoding);
+// }
+
+// static void print_content_language(const content_language_header_rtsp_t *h) {
+//     if (!hdr_present(h->name)) return;
+//     printf("    %s%s%s\n", h->name, h->colon_space, h->language);
+// }
+
+// static void print_content_length(const content_length_header_rtsp_t *h) {
+//     if (!hdr_present(h->name)) return;
+//     printf("    %s%s%d\n", h->name, h->colon_space, h->length);
+// }
+
+// static void print_content_location(const content_location_header_rtsp_t *h) {
+//     if (!hdr_present(h->name)) return;
+//     printf("    %s%s%s\n", h->name, h->colon_space, h->uri);
+// }
+
+// static void print_session(const session_header_rtsp_t *h) {
+//     if (!hdr_present(h->name)) return;
+//     /* 既支持无 timeout，也支持 ";timeout=" 数值（当 semicolon_timeout 非空时打印） */
+//     if (h->semicolon_timeout[0] != '\0') {
+//         printf("    %s%s%s%s%d\n", h->name, h->colon_space, h->session_id, h->semicolon_timeout, h->timeout);
+//     } else {
+//         printf("    %s%s%s\n", h->name, h->colon_space, h->session_id);
+//     }
+// }
+
+// /* ---- grouped printers for DESCRIBE ---- */
+// static void print_common_headers_for_describe(const rtsp_describe_packet_t *p) {
+//     print_cseq(&p->cseq_header);
+//     print_connection(&p->connection_header);
+//     print_date_like("Date", &p->date_header);
+//     print_via(&p->via_header);
+// }
+
+// static void print_request_headers_for_describe(const rtsp_describe_packet_t *p) {
+//     print_accept(&p->accept_header);
+//     print_accept_encoding(&p->accept_encoding_header);
+//     print_accept_language(&p->accept_language_header);
+//     print_authorization(&p->authorization_header);
+//     print_bandwidth(&p->bandwidth_header);
+//     /* optional blocksize */
+//     if (hdr_present(p->blocksize_header.name))
+//         printf("    %s%s%d\n", p->blocksize_header.name, p->blocksize_header.colon_space, p->blocksize_header.value);
+
+//     print_content_base(&p->content_base_header);
+//     print_content_encoding(&p->content_encoding_header);
+//     print_content_language(&p->content_language_header);
+//     print_content_length(&p->content_length_header);
+//     print_content_location(&p->content_location_header);
+
+//     /* date-like: Expires / If-Modified-Since / Last-Modified */
+//     print_date_like("Expires", &p->expires_header);
+//     print_date_like("If-Modified-Since", &p->if_modified_since_header);
+//     print_date_like("Last-Modified", &p->last_modified_header);
+
+//     print_from(&p->from_header);
+//     print_proxy_require(&p->proxy_require_header);
+//     print_referer(&p->referer_header);
+//     print_require(&p->require_header);
+//     print_session(&p->session_header);
+//     print_user_agent(&p->user_agent_header);
+// }
+
+// static void print_headers_for_describe(const rtsp_describe_packet_t *pkt) {
+//     print_common_headers_for_describe(pkt);
+//     print_request_headers_for_describe(pkt);
+// }
+
+
+// /* ===================== SETUP ===================== */
+
+// /* ---- headers unique to / newly used in SETUP ---- */
+// static void print_transport(const transport_header_rtsp_t *h) {
+//     if (!hdr_present(h->name)) return;
+//     /* 形如：Transport: RTP/AVP;unicast;client_port=8000-8001 */
+//     printf("    %s%s%s%c%s%c%s%s%s\n",
+//            h->name, h->colon_space,
+//            h->protocol, h->semicolon1,
+//            h->cast_mode, h->semicolon2,
+//            h->client_port_prefix, h->port_range, "");
+// }
+
+// static void print_cache_control(const cache_control_header_rtsp_t *h) {
+//     if (!hdr_present(h->name)) return;
+//     printf("    %s%s%s\n", h->name, h->colon_space, h->directive);
+// }
+
+// static void print_conference(const conference_header_rtsp_t *h) {
+//     if (!hdr_present(h->name)) return;
+//     printf("    %s%s%s\n", h->name, h->colon_space, h->conference_id);
+// }
+
+// /* ---- grouped printers for SETUP ---- */
+// static void print_common_headers_for_setup(const rtsp_setup_packet_t *p) {
+//     print_cseq(&p->cseq_header);
+//     print_connection(&p->connection_header);
+//     print_date_like("Date", &p->date_header);
+//     print_via(&p->via_header);
+// }
+
+// static void print_request_headers_for_setup(const rtsp_setup_packet_t *p) {
+//     print_accept_language(&p->accept_language_header);
+//     print_authorization(&p->authorization_header);
+//     print_bandwidth(&p->bandwidth_header);
+
+//     if (hdr_present(p->blocksize_header.name))
+//         printf("    %s%s%d\n", p->blocksize_header.name, p->blocksize_header.colon_space, p->blocksize_header.value);
+
+//     print_cache_control(&p->cache_control_header);
+//     print_conference(&p->conference_header);
+//     print_from(&p->from_header);
+//     print_date_like("If-Modified-Since", &p->if_modified_since_header);
+//     print_proxy_require(&p->proxy_require_header);
+//     print_referer(&p->referer_header);
+//     print_require(&p->require_header);
+
+//     /* mandatory */
+//     print_transport(&p->transport_header);
+
+//     print_user_agent(&p->user_agent_header);
+// }
+
+// static void print_headers_for_setup(const rtsp_setup_packet_t *pkt) {
+//     print_common_headers_for_setup(pkt);
+//     print_request_headers_for_setup(pkt);
+// }
+
+// /* ===================== PLAY / PAUSE / TEARDOWN ===================== */
+
+// /* ---- headers newly used here ---- */
+// static void print_blocksize(const blocksize_header_rtsp_t *h) {
+//     if (!hdr_present(h->name)) return;
+//     printf("    %s%s%d\n", h->name, h->colon_space, h->value);
+// }
+
+// static void print_range(const range_header_rtsp_t *h) {
+//     if (!hdr_present(h->name)) return;
+//     /* 例: Range: npt=0-7.741 */
+//     printf("    %s%s%s%c%s%c%s\n",
+//            h->name, h->colon_space,
+//            h->unit, h->equals, h->start, h->dash, h->end);
+// }
+
+// static void print_scale(const scale_header_rtsp_t *h) {
+//     if (!hdr_present(h->name)) return;
+//     printf("    %s%s%.3f\n", h->name, h->colon_space, h->value);
+// }
+
+// static void print_speed(const speed_header_rtsp_t *h) {
+//     if (!hdr_present(h->name)) return;
+//     printf("    %s%s%.3f\n", h->name, h->colon_space, h->value);
+// }
+
+// /* -------------------- PLAY -------------------- */
+// static void print_common_headers_for_play(const rtsp_play_packet_t *p) {
+//     print_cseq(&p->cseq_header);
+//     print_connection(&p->connection_header);
+//     print_date_like("Date", &p->date_header);
+//     print_via(&p->via_header);
+// }
+
+// static void print_request_headers_for_play(const rtsp_play_packet_t *p) {
+//     print_accept_language(&p->accept_language_header);
+//     print_authorization(&p->authorization_header);
+//     print_bandwidth(&p->bandwidth_header);
+//     print_blocksize(&p->blocksize_header);
+//     print_from(&p->from_header);
+//     print_proxy_require(&p->proxy_require_header);
+//     print_range(&p->range_header);
+//     print_referer(&p->referer_header);
+//     print_require(&p->require_header);
+//     print_scale(&p->scale_header);
+//     print_session(&p->session_header);
+//     print_speed(&p->speed_header);
+//     print_user_agent(&p->user_agent_header);
+// }
+
+// static void print_headers_for_play(const rtsp_play_packet_t *pkt) {
+//     print_common_headers_for_play(pkt);
+//     print_request_headers_for_play(pkt);
+// }
+
+// /* -------------------- PAUSE -------------------- */
+// static void print_common_headers_for_pause(const rtsp_pause_packet_t *p) {
+//     print_cseq(&p->cseq_header);
+//     print_connection(&p->connection_header);
+//     print_date_like("Date", &p->date_header);
+//     print_via(&p->via_header);
+// }
+
+// static void print_request_headers_for_pause(const rtsp_pause_packet_t *p) {
+//     print_accept_language(&p->accept_language_header);
+//     print_authorization(&p->authorization_header);
+//     print_bandwidth(&p->bandwidth_header);
+//     print_blocksize(&p->blocksize_header);
+//     print_from(&p->from_header);
+//     print_proxy_require(&p->proxy_require_header);
+//     print_range(&p->range_header);
+//     print_referer(&p->referer_header);
+//     print_require(&p->require_header);
+//     print_session(&p->session_header);
+//     print_user_agent(&p->user_agent_header);
+// }
+
+// static void print_headers_for_pause(const rtsp_pause_packet_t *pkt) {
+//     print_common_headers_for_pause(pkt);
+//     print_request_headers_for_pause(pkt);
+// }
+
+// /* -------------------- TEARDOWN -------------------- */
+// static void print_common_headers_for_teardown(const rtsp_teardown_packet_t *p) {
+//     print_cseq(&p->cseq_header);
+//     print_connection(&p->connection_header);
+//     print_date_like("Date", &p->date_header);
+//     print_via(&p->via_header);
+// }
+
+// static void print_request_headers_for_teardown(const rtsp_teardown_packet_t *p) {
+//     print_accept_language(&p->accept_language_header);
+//     print_authorization(&p->authorization_header);
+//     print_bandwidth(&p->bandwidth_header);
+//     print_from(&p->from_header);
+//     print_proxy_require(&p->proxy_require_header);
+//     print_referer(&p->referer_header);
+//     print_require(&p->require_header);
+//     print_session(&p->session_header);
+//     print_user_agent(&p->user_agent_header);
+// }
+
+// static void print_headers_for_teardown(const rtsp_teardown_packet_t *pkt) {
+//     print_common_headers_for_teardown(pkt);
+//     print_request_headers_for_teardown(pkt);
+// }
+
+// /* ===================== GET_PARAMETER ===================== */
+// static void print_common_headers_for_get_parameter(const rtsp_get_parameter_packet_t *p) {
+//     print_cseq(&p->cseq_header);
+//     print_connection(&p->connection_header);
+//     print_date_like("Date", &p->date_header);
+//     print_via(&p->via_header);
+// }
+
+// static void print_request_headers_for_get_parameter(const rtsp_get_parameter_packet_t *p) {
+//     print_accept(&p->accept_header);
+//     print_accept_encoding(&p->accept_encoding_header);
+//     print_accept_language(&p->accept_language_header);
+//     print_authorization(&p->authorization_header);
+//     print_bandwidth(&p->bandwidth_header);
+//     print_blocksize(&p->blocksize_header);
+//     print_content_base(&p->content_base_header);
+//     print_content_length(&p->content_length_header);
+//     print_content_location(&p->content_location_header);
+//     print_from(&p->from_header);
+//     print_date_like("Last-Modified", &p->last_modified_header);
+//     print_proxy_require(&p->proxy_require_header);
+//     print_referer(&p->referer_header);
+//     print_require(&p->require_header);
+//     print_session(&p->session_header);
+//     print_user_agent(&p->user_agent_header);
+// }
+
+// static void print_headers_for_get_parameter(const rtsp_get_parameter_packet_t *pkt) {
+//     print_common_headers_for_get_parameter(pkt);
+//     print_request_headers_for_get_parameter(pkt);
+// }
+
+// /* content-type: "Content-Type: <media_type>/<sub_type>" */
+// static void print_content_type(const content_type_header_rtsp_t *h) {
+//     if (!hdr_present(h->name)) return;
+//     printf("    %s%s%s%c%s\n",
+//            h->name, h->colon_space,
+//            h->media_type, h->slash, h->sub_type);
+// }
+
+// /* ===================== SET_PARAMETER ===================== */
+// static void print_common_headers_for_set_parameter(const rtsp_set_parameter_packet_t *p) {
+//     print_cseq(&p->cseq_header);
+//     print_connection(&p->connection_header);
+//     print_date_like("Date", &p->date_header);
+//     print_via(&p->via_header);
+// }
+
+// static void print_request_headers_for_set_parameter(const rtsp_set_parameter_packet_t *p) {
+//     print_accept_language(&p->accept_language_header);
+//     print_authorization(&p->authorization_header);
+//     print_bandwidth(&p->bandwidth_header);
+//     print_blocksize(&p->blocksize_header);
+//     print_content_encoding(&p->content_encoding_header);
+//     print_content_length(&p->content_length_header);
+//     print_content_type(&p->content_type_header);
+//     print_from(&p->from_header);
+//     print_proxy_require(&p->proxy_require_header);
+//     print_referer(&p->referer_header);
+//     print_require(&p->require_header);
+//     print_session(&p->session_header);
+//     print_user_agent(&p->user_agent_header);
+
+//     /* 打印 body（假设 body 是 \0 结尾字符串，否则需用长度参数） */
+//     if (p->body[0] != '\0') {
+//         printf("    Body: %s\n", p->body);
+//     }
+// }
+
+// static void print_headers_for_set_parameter(const rtsp_set_parameter_packet_t *pkt) {
+//     print_common_headers_for_set_parameter(pkt);
+//     print_request_headers_for_set_parameter(pkt);
+// }
+
+// /* ===================== REDIRECT ===================== */
+// static void print_common_headers_for_redirect(const rtsp_redirect_packet_t *p) {
+//     print_cseq(&p->cseq_header);
+//     print_connection(&p->connection_header);
+//     print_date_like("Date", &p->date_header);
+//     print_via(&p->via_header);
+// }
+
+// static void print_request_headers_for_redirect(const rtsp_redirect_packet_t *p) {
+//     print_accept_language(&p->accept_language_header);
+//     print_authorization(&p->authorization_header);
+//     print_bandwidth(&p->bandwidth_header);
+//     print_blocksize(&p->blocksize_header);
+//     print_from(&p->from_header);
+//     print_proxy_require(&p->proxy_require_header);
+//     print_referer(&p->referer_header);
+//     print_require(&p->require_header);
+//     print_session(&p->session_header);
+//     print_user_agent(&p->user_agent_header);
+// }
+
+// static void print_headers_for_redirect(const rtsp_redirect_packet_t *pkt) {
+//     print_common_headers_for_redirect(pkt);
+//     print_request_headers_for_redirect(pkt);
+// }
+
+// /* ===================== ANNOUNCE ===================== */
+// static void print_common_headers_for_announce(const rtsp_announce_packet_t *p) {
+//     print_cseq(&p->cseq_header);
+//     print_connection(&p->connection_header);
+//     print_date_like("Date", &p->date_header);
+//     print_via(&p->via_header);
+// }
+
+// static void print_request_headers_for_announce(const rtsp_announce_packet_t *p) {
+//     print_accept_language(&p->accept_language_header);
+//     print_authorization(&p->authorization_header);
+//     print_bandwidth(&p->bandwidth_header);
+//     print_blocksize(&p->blocksize_header);
+//     print_content_encoding(&p->content_encoding_header);
+//     print_content_language(&p->content_language_header);
+//     print_content_length(&p->content_length_header);
+//     print_content_type(&p->content_type_header);
+//     print_date_like("Expires", &p->expires_header);
+//     print_from(&p->from_header);
+//     print_proxy_require(&p->proxy_require_header);
+//     print_referer(&p->referer_header);
+//     print_require(&p->require_header);
+//     print_session(&p->session_header);
+//     print_user_agent(&p->user_agent_header);
+
+//     if (p->body[0] != '\0') {
+//         printf("    Body: %s\n", p->body);
+//     }
+// }
+
+// static void print_headers_for_announce(const rtsp_announce_packet_t *pkt) {
+//     print_common_headers_for_announce(pkt);
+//     print_request_headers_for_announce(pkt);
+// }
+
+// /* ===================== RECORD ===================== */
+// static void print_common_headers_for_record(const rtsp_record_packet_t *p) {
+//     print_cseq(&p->cseq_header);
+//     print_connection(&p->connection_header);
+//     print_date_like("Date", &p->date_header);
+//     print_via(&p->via_header);
+// }
+
+// static void print_request_headers_for_record(const rtsp_record_packet_t *p) {
+//     print_accept_language(&p->accept_language_header);
+//     print_authorization(&p->authorization_header);
+//     print_bandwidth(&p->bandwidth_header);
+//     print_blocksize(&p->blocksize_header);
+//     print_from(&p->from_header);
+//     print_proxy_require(&p->proxy_require_header);
+//     print_range(&p->range_header);
+//     print_referer(&p->referer_header);
+//     print_require(&p->require_header);
+//     print_scale(&p->scale_header);
+//     print_session(&p->session_header);
+//     print_user_agent(&p->user_agent_header);
+// }
+
+// static void print_headers_for_record(const rtsp_record_packet_t *pkt) {
+//     print_common_headers_for_record(pkt);
+//     print_request_headers_for_record(pkt);
+// }
+
+
+// void print_rtsp_packets(const rtsp_packet_t *packets, size_t count) {
+//     for (size_t i = 0; i < count; i++) {
+//         const rtsp_packet_t *pkt = &packets[i];
+//         printf("Packet %zu:\n", i + 1);
+//         switch (pkt->type) {
+//             case RTSP_TYPE_OPTIONS:
+//                 printf("  Type: OPTIONS\n");
+//                 printf("  Method: %s\n", pkt->options.method);
+//                 printf("  Request URI: %s\n", pkt->options.request_uri);
+//                 printf("  RTSP Version: %s\n", pkt->options.rtsp_version);
+//                 print_headers_for_options(&pkt->options);
+//                 // Print other headers...
+//                 break;
+//             case RTSP_TYPE_DESCRIBE:
+//                 printf("  Type: DESCRIBE\n");
+//                 printf("  Method: %s\n", pkt->describe.method);
+//                 printf("  Request URI: %s\n", pkt->describe.request_uri);
+//                 printf("  RTSP Version: %s\n", pkt->describe.rtsp_version);
+//                 print_headers_for_describe(&pkt->describe);
+//                 // Print other headers...
+//                 break;
+//             case RTSP_TYPE_SETUP:
+//                 printf("  Type: SETUP\n");
+//                 printf("  Method: %s\n", pkt->setup.method);
+//                 printf("  Request URI: %s\n", pkt->setup.request_uri);
+//                 printf("  RTSP Version: %s\n", pkt->setup.rtsp_version);
+//                 print_headers_for_setup(&pkt->setup);
+//                 // Print other headers...
+//                 break;
+//             case RTSP_TYPE_PLAY:
+//                 printf("  Type: PLAY\n");
+//                 printf("  Method: %s\n", pkt->play.method);
+//                 printf("  Request URI: %s\n", pkt->play.request_uri);
+//                 printf("  RTSP Version: %s\n", pkt->play.rtsp_version);
+//                 print_headers_for_play(&pkt->play);
+//                 // Print other headers...
+//                 break;
+//             case RTSP_TYPE_PAUSE:
+//                 printf("  Type: PAUSE\n");
+//                 printf("  Method: %s\n", pkt->pause.method);
+//                 printf("  Request URI: %s\n", pkt->pause.request_uri);
+//                 printf("  RTSP Version: %s\n", pkt->pause.rtsp_version);
+//                 print_headers_for_pause(&pkt->pause);
+//                 // Print other headers...
+//                 break;
+//             case RTSP_TYPE_TEARDOWN:
+//                 printf("  Type: TEARDOWN\n");
+//                 printf("  Method: %s\n", pkt->teardown.method);
+//                 printf("  Request URI: %s\n", pkt->teardown.request_uri);
+//                 printf("  RTSP Version: %s\n", pkt->teardown.rtsp_version);
+//                 print_headers_for_teardown(&pkt->teardown);
+//                 // Print other headers...
+//                 break;
+//             case RTSP_TYPE_GET_PARAMETER:
+//                 printf("  Type: GET_PARAMETER\n");
+//                 printf("  Method: %s\n", pkt->get_parameter.method);
+//                 printf("  Request URI: %s\n", pkt->get_parameter.request_uri);
+//                 printf("  RTSP Version: %s\n", pkt->get_parameter.rtsp_version);
+//                 print_headers_for_get_parameter(&pkt->get_parameter);
+//                 // Print other headers...
+//                 break;
+//             case RTSP_TYPE_SET_PARAMETER:
+//                 printf("  Type: SET_PARAMETER\n");
+//                 printf("  Method: %s\n", pkt->set_parameter.method);
+//                 printf("  Request URI: %s\n", pkt->set_parameter.request_uri);
+//                 printf("  RTSP Version: %s\n", pkt->set_parameter.rtsp_version);
+//                 print_headers_for_set_parameter(&pkt->set_parameter);
+//                 // Print other headers...
+//                 break;
+//             case RTSP_TYPE_REDIRECT:
+//                 printf("  Type: REDIRECT\n");
+//                 printf("  Method: %s\n", pkt->redirect.method);
+//                 printf("  Request URI: %s\n", pkt->redirect.request_uri);
+//                 printf("  RTSP Version: %s\n", pkt->redirect.rtsp_version);
+//                 print_headers_for_redirect(&pkt->redirect);
+//                 // Print other headers...
+//                 break;
+//             case RTSP_TYPE_ANNOUNCE:
+//                 printf("  Type: ANNOUNCE\n");
+//                 printf("  Method: %s\n", pkt->announce.method);
+//                 printf("  Request URI: %s\n", pkt->announce.request_uri);
+//                 printf("  RTSP Version: %s\n", pkt->announce.rtsp_version);
+//                 print_headers_for_announce(&pkt->announce);
+//                 // Print other headers...
+//                 break;
+//             case RTSP_TYPE_RECORD:
+//                 printf("  Type: RECORD\n");
+//                 printf("  Method: %s\n", pkt->record.method);
+//                 printf("  Request URI: %s\n", pkt->record.request_uri);
+//                 printf("  RTSP Version: %s\n", pkt->record.rtsp_version);
+//                 print_headers_for_record(&pkt->record);
+//                 // Print other headers...
+//                 break;
+//             default:
+//                 printf("  Unknown type!\n");
+//         }
+//         printf("\n");
+//     }
+// }

@@ -1,0 +1,3 @@
+PLAY rtsp://example.com/media.mp4/trackID=1 RTSP/1.0
+CSeq: 4
+

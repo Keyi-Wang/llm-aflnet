@@ -1,0 +1,22 @@
+GET_PARAMETER rtsp://example.com/media.mp4 RTSP/1.0
+CSeq: 7
+Connection: keep-alive
+Date: Mon, 23 Jun 2025 12:35:30 GMT
+Via: RTSP/1.0 proxy.example.com:554;branch=z9hG4bKgp2
+Accept: application/sdp
+Accept-Encoding: gzip
+Accept-Language: en-US,zh-CN;q=0.9
+Authorization: Basic dXNlcjpzZWNyZXQ=
+Bandwidth: 10000
+Blocksize: 1024
+Content-Base: rtsp://example.com/
+Content-Length: 0
+Content-Location: rtsp://example.com/media.mp4
+From: user@example.com
+Last-Modified: Mon, 23 Jun 2025 11:00:00 GMT
+Proxy-Require: proxy-feature-tag
+Referer: http://example.com/player.html
+Require: implicit-play
+Session: 12345678;timeout=60
+User-Agent: MyRTSPClient/1.0
+

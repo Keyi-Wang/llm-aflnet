@@ -1,0 +1,3 @@
+RECORD rtsp://example.com/media.mp4 RTSP/1.0
+CSeq: 11
+
