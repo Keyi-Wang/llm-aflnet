@@ -1,0 +1,8 @@
+INVITE sip:bob@example.com SIP/2.0
+Call-ID: min-invite@example.com
+CSeq: 1 INVITE
+From: <sip:alice@example.com>
+To: <sip:bob@example.com>
+Via: SIP/2.0/UDP pc33.example.com;branch=z9hG4bK1
+Max-Forwards: 70
+

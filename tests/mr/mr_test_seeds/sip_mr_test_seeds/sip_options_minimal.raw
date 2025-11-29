@@ -1,0 +1,8 @@
+OPTIONS sip:service@example.com SIP/2.0
+Call-ID: min-options@example.com
+CSeq: 1 OPTIONS
+From: <sip:alice@example.com>
+To: <sip:service@example.com>
+Via: SIP/2.0/UDP pc33.example.com;branch=z9hG4bKoptmin
+Max-Forwards: 70
+

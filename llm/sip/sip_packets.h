@@ -606,7 +606,7 @@ typedef struct {
 #ifndef HAVE_SIP_RETRY_AFTER_HDR_T
 typedef struct {
   char name[SIP_TOKEN_LEN];        /* "Retry-After" */
-  char sep[SIP_SP_LEN];            /* ": " */
+  char colon_space[SIP_SP_LEN];            /* ": " */
   char value[64];                  /* seconds or HTTP-date [keep modest] */
   char crlf[SIP_CRLF_LEN];         /* "\r\n" */
 } sip_retry_after_hdr_t;

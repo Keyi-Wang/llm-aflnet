@@ -30,28 +30,6 @@ static size_t cpy_trim(char *dst, size_t dst_sz, const char *src, size_t len) {
   return n;
 }
 
-static size_t cpy_token_until(char *dst, size_t dst_sz, const char *src, size_t len, const char *stops) {
-  size_t i = 0;
-  for (; i < len; ++i) {
-    if (strchr(stops, src[i]) != NULL) break;
-  }
-  return cpy_trim(dst, dst_sz, src, i);
-}
-
-static int iequal_n(const char *a, const char *b, size_t n) {
-  for (size_t i = 0; i < n; ++i) {
-    char ca = a[i], cb = b[i];
-    if (!ca || !cb) return tolower((unsigned char)ca) == tolower((unsigned char)cb);
-    if (tolower((unsigned char)ca) != tolower((unsigned char)cb)) return 0;
-  }
-  return 1;
-}
-
-static int istarts_with_ci(const char *s, size_t n, const char *prefix) {
-  size_t m = strlen(prefix);
-  if (n < m) return 0;
-  return iequal_n(s, prefix, m);
-}
 
 // 把 name 与 ": " 与 "\r\n" 写好
 static void hdr_set_present(char name_buf[], size_t name_len,
@@ -511,6 +489,7 @@ static void init_all_headers_absent(sip_packet_t *pkt) {
       HDR_MARK_ABSENT(p->require);
       HDR_MARK_ABSENT(p->timestamp);
       HDR_MARK_ABSENT(p->user_agent);
+      HDR_MARK_ABSENT(p->retry_after);
       // retry_after 是 optional，占位缺省即可（未显式 name 字段；忽略）
       snprintf(p->end_crlf, sizeof p->end_crlf, "\r\n");
       p->body[0] = '\0';              /* <== 新增 */
@@ -545,12 +524,6 @@ static void init_all_headers_absent(sip_packet_t *pkt) {
   }
 }
 
-static const char *skip_line_end(const char *p, const char *end) {
-  // 跳过一行的结尾：\r\n, \n, 或 \r
-  if (p < end && *p == '\r') p++;
-  if (p < end && *p == '\n') p++;
-  return p;
-}
 
 static const char *find_headers_end(const char *p, const char *end) {
   // 找到空行（\r\n\r\n 或 \n\n）
@@ -750,6 +723,7 @@ static void parse_one_header_line(const char *line, size_t n, sip_packet_t *pkt)
       else if (!strcasecmp(hname, "Require"))      parse_simple_text_header("Require", val, vlen, p->require.name,sizeof p->require.name, p->require.colon_space,sizeof p->require.colon_space, p->require.option_tags,sizeof p->require.option_tags, p->require.crlf,sizeof p->require.crlf);
       else if (!strcasecmp(hname, "Timestamp"))    parse_timestamp(val, vlen, &p->timestamp);
       else if (!strcasecmp(hname, "User-Agent"))   parse_simple_text_header("User-Agent", val, vlen, p->user_agent.name,sizeof p->user_agent.name, p->user_agent.colon_space,sizeof p->user_agent.colon_space, p->user_agent.product,sizeof p->user_agent.product, p->user_agent.crlf,sizeof p->user_agent.crlf);
+      else if (!strcasecmp(hname, "Retry-After"))   parse_simple_text_header("Retry-After", val, vlen, p->retry_after.name,sizeof p->retry_after.name, p->retry_after.colon_space,sizeof p->retry_after.colon_space, p->retry_after.value,sizeof p->retry_after.value, p->retry_after.crlf,sizeof p->retry_after.crlf);
     } break;
     case SIP_PKT_OPTIONS: {
       sip_options_packet_t *p = &pkt->pkt.options;
@@ -812,8 +786,7 @@ static size_t parse_single_message(const u8 *msg, size_t msg_len, sip_packet_t *
       snprintf(q->space1, sizeof q->space1, " ");
       snprintf(q->request_uri, sizeof q->request_uri, "%s", uri);
       snprintf(q->space2, sizeof q->space2, " ");
-      if (ver[0]) snprintf(q->sip_version, sizeof q->sip_version, "%s", ver);
-      else snprintf(q->sip_version, sizeof q->sip_version, "SIP/2.0");
+      snprintf(q->sip_version, sizeof q->sip_version, "%s", ver);
       snprintf(q->crlf1, sizeof q->crlf1, "\r\n");
       init_all_headers_absent(out_pkt);
     } break;
@@ -824,8 +797,7 @@ static size_t parse_single_message(const u8 *msg, size_t msg_len, sip_packet_t *
       snprintf(q->space1, sizeof q->space1, " ");
       snprintf(q->request_uri, sizeof q->request_uri, "%s", uri);
       snprintf(q->space2, sizeof q->space2, " ");
-      if (ver[0]) snprintf(q->sip_version, sizeof q->sip_version, "%s", ver);
-      else snprintf(q->sip_version, sizeof q->sip_version, "SIP/2.0");
+      snprintf(q->sip_version, sizeof q->sip_version, "%s", ver);
       snprintf(q->crlf1, sizeof q->crlf1, "\r\n");
       init_all_headers_absent(out_pkt);
     } break;
@@ -836,8 +808,7 @@ static size_t parse_single_message(const u8 *msg, size_t msg_len, sip_packet_t *
       snprintf(q->space1, sizeof q->space1, " ");
       snprintf(q->request_uri, sizeof q->request_uri, "%s", uri);
       snprintf(q->space2, sizeof q->space2, " ");
-      if (ver[0]) snprintf(q->sip_version, sizeof q->sip_version, "%s", ver);
-      else snprintf(q->sip_version, sizeof q->sip_version, "SIP/2.0");
+      snprintf(q->sip_version, sizeof q->sip_version, "%s", ver);
       snprintf(q->crlf1, sizeof q->crlf1, "\r\n");
       init_all_headers_absent(out_pkt);
     } break;
@@ -848,8 +819,7 @@ static size_t parse_single_message(const u8 *msg, size_t msg_len, sip_packet_t *
       snprintf(q->space1, sizeof q->space1, " ");
       snprintf(q->request_uri, sizeof q->request_uri, "%s", uri);
       snprintf(q->space2, sizeof q->space2, " ");
-      if (ver[0]) snprintf(q->sip_version, sizeof q->sip_version, "%s", ver);
-      else snprintf(q->sip_version, sizeof q->sip_version, "SIP/2.0");
+      snprintf(q->sip_version, sizeof q->sip_version, "%s", ver);
       snprintf(q->crlf1, sizeof q->crlf1, "\r\n");
       init_all_headers_absent(out_pkt);
     } break;
@@ -860,8 +830,7 @@ static size_t parse_single_message(const u8 *msg, size_t msg_len, sip_packet_t *
       snprintf(q->space1, sizeof q->space1, " ");
       snprintf(q->request_uri, sizeof q->request_uri, "%s", uri);
       snprintf(q->space2, sizeof q->space2, " ");
-      if (ver[0]) snprintf(q->sip_version, sizeof q->sip_version, "%s", ver);
-      else snprintf(q->sip_version, sizeof q->sip_version, "SIP/2.0");
+      snprintf(q->sip_version, sizeof q->sip_version, "%s", ver);
       snprintf(q->crlf1, sizeof q->crlf1, "\r\n");
       init_all_headers_absent(out_pkt);
     } break;
@@ -872,24 +841,13 @@ static size_t parse_single_message(const u8 *msg, size_t msg_len, sip_packet_t *
       snprintf(q->space1, sizeof q->space1, " ");
       snprintf(q->request_uri, sizeof q->request_uri, "%s", uri);
       snprintf(q->space2, sizeof q->space2, " ");
-      if (ver[0]) snprintf(q->sip_version, sizeof q->sip_version, "%s", ver);
-      else snprintf(q->sip_version, sizeof q->sip_version, "SIP/2.0");
+      snprintf(q->sip_version, sizeof q->sip_version, "%s", ver);
       snprintf(q->crlf1, sizeof q->crlf1, "\r\n");
       init_all_headers_absent(out_pkt);
     } break;
     default: {
       // Unknown：也按 INVITE 构造，至少不崩
-      out_pkt->cmd_type = SIP_PKT_INVITE;
-      sip_invite_packet_t *q = &out_pkt->pkt.invite;
-      memzero(q, sizeof *q);
-      snprintf(q->method, sizeof q->method, "%s", method);
-      snprintf(q->space1, sizeof q->space1, " ");
-      snprintf(q->request_uri, sizeof q->request_uri, "%s", uri);
-      snprintf(q->space2, sizeof q->space2, " ");
-      if (ver[0]) snprintf(q->sip_version, sizeof q->sip_version, "%s", ver);
-      else snprintf(q->sip_version, sizeof q->sip_version, "SIP/2.0");
-      snprintf(q->crlf1, sizeof q->crlf1, "\r\n");
-      init_all_headers_absent(out_pkt);
+      out_pkt->cmd_type = SIP_PKT_UNKNOWN;
     } break;
   }
 

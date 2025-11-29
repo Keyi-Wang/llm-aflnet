@@ -1,0 +1,8 @@
+BYE sip:bob@example.com SIP/2.0
+Call-ID: min-bye@example.com
+CSeq: 1 BYE
+From: <sip:alice@example.com>
+To: <sip:bob@example.com>
+Via: SIP/2.0/UDP pc33.example.com;branch=z9hG4bKbyemin
+Max-Forwards: 70
+

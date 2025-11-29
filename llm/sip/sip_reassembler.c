@@ -94,14 +94,6 @@ static int emit_call_id(const sip_call_id_hdr_t *h, char *dst, size_t cap, size_
   return out_append_hdr_text(h->name, h->value, dst, cap, pos);
 }
 
-static int emit_simple_value(const char *name, const char *sep, const char *val, char *dst, size_t cap, size_t *pos) {
-  if (!name || !name[0]) return 0;
-  if (out_append(dst, cap, pos, name)) return -1;
-  if (sep && out_append(dst, cap, pos, sep)) return -1;
-  if (val && out_append(dst, cap, pos, val)) return -1;
-  if (out_append(dst, cap, pos, "\r\n")) return -1;
-  return 0;
-}
 
 static int emit_addr_like(const char *name, const char *sep,
                           const char *display, char sp_opt,
@@ -252,12 +244,7 @@ static int emit_resp_key(const sip_response_key_hdr_t *h, char *dst, size_t cap,
 
 /* --------- Content-Length 同步辅助 --------- */
 static void ensure_cl_synced(sip_content_length_hdr_t *cl, size_t body_len) {
-  /* 若无 header 名且需要写 body，则补齐名字 */
-  if (cl->name[0] == '\0') {
-    /* 固定字段，保持和结构体风格一致 */
-    snprintf(cl->name, sizeof cl->name, "Content-Length");
-    /* colon_space/crlf 不由 emit_content_length 使用，这里可不必写入 */
-  }
+
   /* 长度统一与 body 一致（即便 body 为 0 也同步） */
   snprintf(cl->length, sizeof cl->length, "%zu", body_len);
 }
@@ -528,7 +515,7 @@ static int emit_register(const sip_register_packet_t *p, char *out, size_t cap, 
   if (out_append_hdr_text(p->require.name, p->require.option_tags, out, cap, pos)) return -1;
   if (emit_timestamp(&p->timestamp, out, cap, pos)) return -1;
   if (out_append_hdr_text(p->user_agent.name, p->user_agent.product, out, cap, pos)) return -1;
-
+  if (out_append_hdr_text(p->retry_after.name, p->retry_after.value, out, cap, pos)) return -1;
   if (out_append(out, cap, pos, p->end_crlf)) return -1;
   if (body_len > 0) {
     if (out_append_n(out, cap, pos, p->body, body_len)) return -1;
@@ -560,7 +547,7 @@ static int emit_options(const sip_options_packet_t *p, char *out, size_t cap, si
   if (emit_accept_enc(&p->accept_encoding, out, cap, pos)) return -1;
   if (emit_accept_lang(&p->accept_language, out, cap, pos)) return -1;
   if (emit_authorization(&p->authorization, out, cap, pos)) return -1;
-
+  if (emit_proxy_auth(&p->proxy_authorization, out, cap, pos)) return -1;
   for (size_t i=0;i<p->record_route_count;i++) if (emit_record_route(&p->record_route[i], out, cap, pos)) return -1;
   for (size_t i=0;i<p->route_count;i++)        if (emit_route(&p->route[i], out, cap, pos)) return -1;
 

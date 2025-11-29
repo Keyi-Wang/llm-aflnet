@@ -1,0 +1,25 @@
+CANCEL sip:bob@example.com SIP/2.0
+Call-ID: a84b4c76e66710@example.com
+CSeq: 314159 CANCEL
+From: "Alice" <sip:alice@example.com>;tag=1928301774
+To: "Bob" <sip:bob@example.com>;tag=9183772
+Via: SIP/2.0/UDP pc33.example.com;branch=z9hG4bKcancel1
+Via: SIP/2.0/UDP backup.example.com;branch=z9hG4bKcancel2
+Accept-Language: en
+Authorization: Digest username="alice", realm="example.com", nonce="stu", uri="sip:bob@example.com", response="5555"
+Content-Length: 0
+Date: Sat, 13 Nov 2010 23:32:00 GMT
+Encryption: pgp;key-id=4321
+Hide: route
+Max-Forwards: 70
+Proxy-Authorization: Digest username="alice", realm="example.com", nonce="vwx", uri="sip:bob@example.com", response="4444"
+Proxy-Require: foo, bar
+Record-Route: <sip:proxy1@example.com;lr>
+Record-Route: <sip:proxy2@example.com;lr>
+Response-Key: key 91011
+Require: 100rel
+Route: <sip:outbound@example.com;lr>
+Route: <sip:backup.example.com;lr>
+Timestamp: 81.2 5.3
+User-Agent: Softphone/1.2 (Linux)
+

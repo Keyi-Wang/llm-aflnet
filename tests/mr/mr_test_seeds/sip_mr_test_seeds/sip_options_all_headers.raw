@@ -1,0 +1,32 @@
+OPTIONS sip:service@example.com SIP/2.0
+Call-ID: a84b4c76e66710@example.com
+CSeq: 1 OPTIONS
+From: "Alice" <sip:alice@example.com>;tag=1928301774
+To: <sip:service@example.com>
+Via: SIP/2.0/UDP pc33.example.com;branch=z9hG4bKopt1
+Via: SIP/2.0/UDP backup.example.com;branch=z9hG4bKopt2
+Accept: application/sdp
+Accept-Encoding: gzip
+Accept-Language: en
+Authorization: Digest username="alice", realm="example.com", nonce="ccc", uri="sip:service@example.com", response="3333"
+Proxy-Authorization: Digest username="alice", realm="example.com", nonce="ddd", uri="sip:service@example.com", response="4444"
+Record-Route: <sip:proxy1@example.com;lr>
+Record-Route: <sip:proxy2@example.com;lr>
+Route: <sip:outbound@example.com;lr>
+Route: <sip:backup.example.com;lr>
+Contact: "Alice" <sip:alice@pc33.example.com>
+Content-Encoding: identity
+Content-Type: application/sdp;charset=utf-8
+Content-Length: 46
+Date: Sat, 13 Nov 2010 23:34:00 GMT
+Encryption: pgp;key-id=1313
+Hide: hop
+Max-Forwards: 70
+Organization: Example Corp
+Proxy-Require: foo, bar
+Response-Key: key 1414
+Require: 100rel
+Timestamp: 101.2 7.3
+User-Agent: Softphone/1.2 (Linux)
+
+Supported: INVITE, ACK, BYE, CANCEL, OPTIONS

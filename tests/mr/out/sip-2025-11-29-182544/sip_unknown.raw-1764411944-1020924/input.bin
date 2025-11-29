@@ -1,0 +1,43 @@
+UNKNOWN sip:registrar@example.com SIP/2.0
+Call-ID: a84b4c76e66710@example.com
+CSeq: 1 REGISTER
+From: "Alice" <sip:alice@example.com>;tag=1928301774
+To: "Alice" <sip:alice@example.com>
+Via: SIP/2.0/UDP pc33.example.com;branch=z9hG4bKreg1
+Via: SIP/2.0/UDP backup.example.com;branch=z9hG4bKreg2
+Accept: application/sdp
+Accept-Encoding: gzip
+Accept-Language: en
+Authorization: Digest username="alice", realm="example.com", nonce="aaa", uri="sip:registrar@example.com", response="1111"
+Record-Route: <sip:proxy1@example.com;lr>
+Record-Route: <sip:proxy2@example.com;lr>
+Route: <sip:outbound@example.com;lr>
+Route: <sip:backup.example.com;lr>
+Contact: "Alice" <sip:alice@pc33.example.com>;expires=3600
+Contact: "Alice" <sip:alice@mobile.example.com>;expires=600
+Content-Encoding: identity
+Content-Type: application/sdp;charset=utf-8
+Content-Length: 226
+Date: Sat, 13 Nov 2010 23:33:00 GMT
+Encryption: pgp;key-id=1010
+Expires: 3600
+Hide: hop
+Max-Forwards: 70
+Organization: Example Corp
+Proxy-Authorization: Digest username="alice", realm="example.com", nonce="bbb", uri="sip:registrar@example.com", response="2222"
+Proxy-Require: foo, bar
+Response-Key: key 1212
+Require: 100rel
+Timestamp: 91.2 6.3
+User-Agent: Softphone/1.2 (Linux)
+Retry-After: 120
+
+v=0\r\n
+o=alice 2890844526 2890844526 IN IP4 registrar.example.com\r\n
+s=REGISTER body example\r\n
+c=IN IP4 registrar.example.com\r\n
+t=0 0\r\n
+m=message 12345 sip 1\r\n
+a=accept-types: application/sdp\r\n
+a=accept-encoding: gzip\r\n
+a=language: en\r\n

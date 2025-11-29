@@ -1,0 +1,15 @@
+[PASS] /home/keyi/llm-aflnet/tests/mr/mr_test_seeds/sip_mr_test_seeds/sip_register_all_headers.raw
+[PASS] /home/keyi/llm-aflnet/tests/mr/mr_test_seeds/sip_mr_test_seeds/sip_invite_minimal.raw
+[PASS] /home/keyi/llm-aflnet/tests/mr/mr_test_seeds/sip_mr_test_seeds/sip_cancel_minimal.raw
+[PASS] /home/keyi/llm-aflnet/tests/mr/mr_test_seeds/sip_mr_test_seeds/sip_ack_all_headers.raw
+[PASS] /home/keyi/llm-aflnet/tests/mr/mr_test_seeds/sip_mr_test_seeds/sip_options_all_headers.raw
+[PASS] /home/keyi/llm-aflnet/tests/mr/mr_test_seeds/sip_mr_test_seeds/sip_register_minimal.raw
+[PASS] /home/keyi/llm-aflnet/tests/mr/mr_test_seeds/sip_mr_test_seeds/sip_options_minimal.raw
+[PASS] /home/keyi/llm-aflnet/tests/mr/mr_test_seeds/sip_mr_test_seeds/sip_cancel_all_headers.raw
+[FAIL] /home/keyi/llm-aflnet/tests/mr/mr_test_seeds/sip_mr_test_seeds/sip_cancel_error.raw
+[FAIL] /home/keyi/llm-aflnet/tests/mr/mr_test_seeds/sip_mr_test_seeds/sip_unknown.raw
+[PASS] /home/keyi/llm-aflnet/tests/mr/mr_test_seeds/sip_mr_test_seeds/sip_ack_minimal.raw
+[PASS] /home/keyi/llm-aflnet/tests/mr/mr_test_seeds/sip_mr_test_seeds/sip_invite_all_headers.raw
+[FAIL] /home/keyi/llm-aflnet/tests/mr/mr_test_seeds/sip_mr_test_seeds/sip_register_all_headers _error.raw
+[PASS] /home/keyi/llm-aflnet/tests/mr/mr_test_seeds/sip_mr_test_seeds/sip_bye_all_headers.raw
+[PASS] /home/keyi/llm-aflnet/tests/mr/mr_test_seeds/sip_mr_test_seeds/sip_bye_minimal.raw

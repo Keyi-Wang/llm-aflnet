@@ -1,0 +1,8 @@
+ACK sip:bob@example.com SIP/2.0
+Call-ID: min-ack@example.com
+CSeq: 1 ACK
+From: <sip:alice@example.com>
+To: <sip:bob@example.com>
+Via: SIP/2.0/UDP pc33.example.com;branch=z9hG4bKackmin
+Max-Forwards: 70
+

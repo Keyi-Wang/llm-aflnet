@@ -1,0 +1,10 @@
+REGISTER sip:registrar@example.com SIP/2.0
+Call-ID: min-register@example.com
+CSeq: 1 REGISTER
+From: <sip:alice@example.com>
+To: <sip:alice@example.com>
+Via: SIP/2.0/UDP pc33.example.com;branch=z9hG4bKregmin
+Contact: <sip:alice@pc33.example.com>
+Expires: 3600
+Max-Forwards: 70
+
