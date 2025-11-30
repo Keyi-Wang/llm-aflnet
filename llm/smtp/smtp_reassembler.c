@@ -6,52 +6,6 @@
 #include <string.h>
 #include <stdio.h>
 
-/* ---------------- 小工具：安全字符串写入 / 拷贝 ---------------- */
-
-static void set_cstr(char dst[], size_t cap, const char *s) {
-    if (!dst || cap == 0) return;
-    if (!s) s = "";
-    (void)snprintf(dst, cap, "%s", s);
-}
-
-static void set_crlf(char dst[SMTP_SZ_CRLF]) {
-    set_cstr(dst, SMTP_SZ_CRLF, "\r\n");
-}
-
-static void set_space_opt(char dst[SMTP_SZ_SPACE], int present) {
-    set_cstr(dst, SMTP_SZ_SPACE, present ? " " : "");
-}
-
-/* 拷贝 [b,e) （不含 e），并裁剪首尾空白（空格/Tab） */
-static void set_span_trim(char dst[], size_t cap, const char *b, const char *e) {
-    if (!dst || cap == 0) return;
-    if (!b || !e || e < b) { dst[0] = '\0'; return; }
-    while (b < e && (*b == ' ' || *b == '\t')) ++b;
-    while (e > b && (e[-1] == ' ' || e[-1] == '\t')) --e;
-    size_t n = (size_t)(e - b);
-    if (n >= cap) n = cap - 1;
-    if (n > 0) memcpy(dst, b, n);
-    dst[n] = '\0';
-}
-
-/* 不裁剪，仅按范围拷贝 */
-static void set_span_raw(char dst[], size_t cap, const char *b, const char *e) {
-    if (!dst || cap == 0) return;
-    if (!b || !e || e < b) { dst[0] = '\0'; return; }
-    size_t n = (size_t)(e - b);
-    if (n >= cap) n = cap - 1;
-    if (n > 0) memcpy(dst, b, n);
-    dst[n] = '\0';
-}
-
-/* line 是否全空白（空格/Tab/CR） */
-static int line_is_blank(const char *b, const char *e) {
-    while (b < e) {
-        unsigned char c = (unsigned char)*b++;
-        if (c != ' ' && c != '\t' && c != '\r') return 0;
-    }
-    return 1;
-}
 
 /* 输出缓冲安全追加 */
 static int out_put(u8 *out, u32 cap, u32 *pos, const char *s) {

@@ -7408,6 +7408,11 @@ for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
        
     }
   }
+  if(out_len > MAX_FILE || out_len < 1) {
+    // printf("重组后的报文长度超过最大限制，跳过\n");
+    continue;
+  }
+
   if (common_fuzz_stuff(argv, output_buf, out_len)) {
     SEM_ACCUM_ONCE();
     goto abandon_entry;
@@ -7425,7 +7430,7 @@ for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
     fix_mqtt(packets, pkt_num);
   }
   else if(strcmp(protocol_name, "RTSP") == 0){
-    // fix_rtsp(packets, pkt_num);
+    fix_rtsp(packets, pkt_num);
   }
   else if(strcmp(protocol_name, "FTP") == 0){
     fix_ftp(packets, pkt_num);
@@ -7460,21 +7465,21 @@ for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
   }
   else if(strcmp(protocol_name, "FTP") == 0){
     if (reassemble_ftp_msgs(packets, pkt_num, output_buf, &out_len) != 0) {
-      printf("FTP_重组失败,跳过\n");
+      // printf("FTP_重组失败,跳过\n");
       continue;
        
     }
   }
   else if(strcmp(protocol_name, "SMTP") == 0){
     if (reassemble_smtp_msgs(packets, pkt_num, output_buf, &out_len) != 0) {
-      printf("SMTP_重组失败,跳过\n");
+      // printf("SMTP_重组失败,跳过\n");
       continue;
        
     }
   }
   else if(strcmp(protocol_name, "SIP") == 0){
     if (reassemble_sip_msgs(packets, pkt_num, output_buf, &out_len) != 0) {
-      printf("SIP_重组失败,跳过\n");
+      // printf("SIP_重组失败,跳过\n");
       continue;
        
     }

@@ -36,15 +36,6 @@ static void set_span_trim(char dst[], size_t cap, const char *b, const char *e) 
     dst[n] = '\0';
 }
 
-/* 不裁剪，仅按范围拷贝 */
-static void set_span_raw(char dst[], size_t cap, const char *b, const char *e) {
-    if (!dst || cap == 0) return;
-    if (!b || !e || e < b) { dst[0] = '\0'; return; }
-    size_t n = (size_t)(e - b);
-    if (n >= cap) n = cap - 1;
-    if (n > 0) memcpy(dst, b, n);
-    dst[n] = '\0';
-}
 
 /* line 是否全空白（空格/Tab/CR） */
 static int line_is_blank(const char *b, const char *e) {
@@ -53,24 +44,6 @@ static int line_is_blank(const char *b, const char *e) {
         if (c != ' ' && c != '\t' && c != '\r') return 0;
     }
     return 1;
-}
-
-/* 输出缓冲安全追加 */
-static int out_put(u8 *out, u32 cap, u32 *pos, const char *s) {
-    if (!s) return 1;
-    size_t n = strlen(s);
-    if (*pos > cap || cap - *pos < n) return 0;
-    memcpy(out + *pos, s, n);
-    *pos += (u32)n;
-    return 1;
-}
-static int out_put_if_nonempty(u8 *out, u32 cap, u32 *pos,
-                               const char *maybe_space, const char *field) {
-    if (!field || !*field) return 1;
-    if (maybe_space && *maybe_space) {
-        if (!out_put(out, cap, pos, maybe_space)) return 0;
-    }
-    return out_put(out, cap, pos, field);
 }
 
 /* ---------------- 命令匹配 / token 化 ---------------- */
@@ -293,6 +266,8 @@ size_t parse_smtp_msg(const uint8_t *buf, size_t buf_len,
                 const char *p = next_token(ab, ae, &t1b, &t1e);
                 if (t1b && t1b < t1e && cmd_ieq(t1b,(size_t)(t1e-t1b),"FROM:")) {
                     /* 读取 reverse-path */
+                    set_cstr(pkt->pkt.mail.from_keyword, SMTP_SZ_CMD, "FROM:");
+                    set_space_opt(pkt->pkt.mail.space1, has_arg ? 1 : 0);
                     const char *rp_b=NULL, *rp_e=NULL;
                     p = next_token(p, ae, &rp_b, &rp_e);
                     if (rp_b && rp_b < rp_e) {
@@ -327,6 +302,8 @@ size_t parse_smtp_msg(const uint8_t *buf, size_t buf_len,
                 const char *t1b=NULL, *t1e=NULL;
                 const char *p = next_token(ab, ae, &t1b, &t1e);
                 if (t1b && t1b < t1e && cmd_ieq(t1b,(size_t)(t1e-t1b),"TO:")) {
+                    set_space_opt(pkt->pkt.rcpt.space1, has_arg ? 1 : 0);
+                    set_cstr(pkt->pkt.rcpt.to_keyword, SMTP_SZ_CMD, "TO:");
                     const char *fp_b=NULL, *fp_e=NULL;
                     p = next_token(p, ae, &fp_b, &fp_e);
                     if (fp_b && fp_b < fp_e) {
@@ -462,26 +439,26 @@ size_t parse_smtp_msg(const uint8_t *buf, size_t buf_len,
                 }
                 set_crlf(pkt->pkt.bdat.crlf);
 
-            //     /* 抓取随后的 <size> 个原始字节作为 chunk 数据 */
-            //     uint32_t want = 0;
-            //     if (!parse_u32_dec(pkt->pkt.bdat.size_str, pkt->pkt.bdat.size_str + strlen(pkt->pkt.bdat.size_str), &want)) {
-            //         want = 0;
-            //     }
+                /* 抓取随后的 <size> 个原始字节作为 chunk 数据 */
+                uint32_t want = 0;
+                if (!parse_u32_dec(pkt->pkt.bdat.size_str, pkt->pkt.bdat.size_str + strlen(pkt->pkt.bdat.size_str), &want)) {
+                    want = 0;
+                }
 
-            //     /* 当前行的 CRLF 已经由外层推进到 nl（le 指向 '\r' 前的位置），下面推进到下一行开头 */
-            //     const char *payload_beg = nl + 1;
-            //     const char *payload_end = end;
-            //     size_t remain = (size_t)(payload_end - payload_beg);
-            //     size_t take = (want <= remain) ? (size_t)want : remain; // 不足时尽可能多取
+                /* 当前行的 CRLF 已经由外层推进到 nl（le 指向 '\r' 前的位置），下面推进到下一行开头 */
+                const char *payload_beg = nl + 1;
+                const char *payload_end = end;
+                size_t remain = (size_t)(payload_end - payload_beg);
+                size_t take = (want <= remain) ? (size_t)want : remain; // 不足时尽可能多取
 
-            //     pkt->pkt.bdat.data     = (const uint8_t*)payload_beg;
-            //     pkt->pkt.bdat.data_len = (uint32_t)take;
+                pkt->pkt.bdat.data     = (const uint8_t*)payload_beg;
+                pkt->pkt.bdat.data_len = (uint32_t)take;
 
-            //     // 推进游标：跳过这块二进制数据
-            //     cur = payload_beg + take;
+                // 推进游标：跳过这块二进制数据
+                cur = payload_beg + take;
 
-            //     ++out_n;
-            //     /* 注意：不要在这里再额外吃一行；BDAT 数据块后面紧接下一个命令或下一段 BDAT */
+                ++out_n;
+                /* 注意：不要在这里再额外吃一行；BDAT 数据块后面紧接下一个命令或下一段 BDAT */
             } break;
 
             default:

@@ -1,0 +1,10 @@
+DATA
+Subject: Test mail with full headers
+From: Alice <alice@example.com>
+To: Bob <bob@example.com>
+
+Hello Bob,
+This is a test message body with multiple lines.
+Regards,
+Alice
+.
