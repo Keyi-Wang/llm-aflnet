@@ -16,16 +16,29 @@
 static u32 message_code_counter = 0;
 khash_t(32) *message_code_map = NULL;
 
-void init_message_code_map(){
-  message_code_map = kh_init(32);
+void init_message_code_map(void) {
+  if (!message_code_map) {
+    message_code_map = kh_init(32);
+    if (!message_code_map) {
+      PFATAL("kh_init(32) failed in init_message_code_map");
+    }
+    message_code_counter = 0;
+  }
 }
 
-void destroy_message_code_map(){
-  kh_destroy(32, message_code_map);
+void destroy_message_code_map(void) {
+  if (message_code_map) {
+    kh_destroy(32, message_code_map);
+    message_code_map = NULL;
+  }
+  message_code_counter = 0;
 }
 
 u32 get_mapped_message_code (u32 ori_message_code){
   u32 mapped_message_code = 0;
+  if (!message_code_map) {
+    init_message_code_map();
+  }
   khiter_t k = kh_get(32, message_code_map, ori_message_code);
   if (k == kh_end(message_code_map)) {
     int ret;
