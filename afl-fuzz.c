@@ -7306,13 +7306,13 @@ else if(strcmp(protocol_name, "SIP") == 0){
   pkt_num = parse_sip_msg(out_buf, len, (sip_packet_t*)packets, 105);
 }
 else{
-  printf("不支持的协议: %s\n", protocol_name);
+  // printf("Unsupported Protocol: %s\n", protocol_name);
   goto real_havoc_stage;
 }
 
 
 if (!pkt_num) {
-  printf("未能解析出任何报文\n");
+  // printf("未能解析出任何报文\n");
   goto real_havoc_stage;
 }else{
   parser_success++;
@@ -7333,7 +7333,7 @@ if (!pkt_num) {
 
 mqtt_packet_t *seed_pkts = malloc(pkt_num * sizeof(*seed_pkts));
 memcpy(seed_pkts, packets, pkt_num * sizeof(*seed_pkts));
-stats_load_state();
+// stats_load_state();
 uint64_t __t0_sem = sem_now_ns();   /* 入口打点 */ 
 // Step 2: Choose a random field in the structured messages and apply LLM-generated mutator to it. Return mutated structured messages(M2').
 stage_name  = "semantic";
@@ -7369,83 +7369,83 @@ for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
   }
   
   // experiments: no-fixer packet valid count
-  stats_load_state();
-  semantic_parse_succ = g_pkt_suc;
-  grammar_parse_succ = g_pkt_gram_suc;
-  semantic_total_sent = 0;
-  memset(output_buf, 0, sizeof(output_buf));
-  out_len = 0;
-  if(strcmp(protocol_name, "MQTT") == 0) {
-    if (reassemble_mqtt_msgs(packets, pkt_num, output_buf, &out_len) != 0) {
-      continue;;
-        // printf("成功生成 %zu 字节的 MQTT 消息\n", out_len);
-    }
-  }
-  else if(strcmp(protocol_name, "RTSP") == 0){
-    if (reassemble_rtsp_msgs(packets, pkt_num, output_buf, &out_len) != 0) {
-      continue;
-        // printf("成功生成 %zu 字节的 RTSP 消息\n", out_len);
-    }
-  }
-  else if(strcmp(protocol_name, "FTP") == 0){
-    if (reassemble_ftp_msgs(packets, pkt_num, output_buf, &out_len) != 0) {
-      printf("FTP_重组失败,跳过\n");
-      continue;
+  // stats_load_state();
+  // semantic_parse_succ = g_pkt_suc;
+  // grammar_parse_succ = g_pkt_gram_suc;
+  // semantic_total_sent = 0;
+  // memset(output_buf, 0, sizeof(output_buf));
+  // out_len = 0;
+  // if(strcmp(protocol_name, "MQTT") == 0) {
+  //   if (reassemble_mqtt_msgs(packets, pkt_num, output_buf, &out_len) != 0) {
+  //     continue;;
+  //       // printf("成功生成 %zu 字节的 MQTT 消息\n", out_len);
+  //   }
+  // }
+  // else if(strcmp(protocol_name, "RTSP") == 0){
+  //   if (reassemble_rtsp_msgs(packets, pkt_num, output_buf, &out_len) != 0) {
+  //     continue;
+  //       // printf("成功生成 %zu 字节的 RTSP 消息\n", out_len);
+  //   }
+  // }
+  // else if(strcmp(protocol_name, "FTP") == 0){
+  //   if (reassemble_ftp_msgs(packets, pkt_num, output_buf, &out_len) != 0) {
+  //     printf("FTP_重组失败,跳过\n");
+  //     continue;
        
-    }
-  }
-  else if(strcmp(protocol_name, "SMTP") == 0){
-    if (reassemble_smtp_msgs(packets, pkt_num, output_buf, &out_len) != 0) {
-      printf("SMTP_重组失败,跳过\n");
-      continue;
+  //   }
+  // }
+  // else if(strcmp(protocol_name, "SMTP") == 0){
+  //   if (reassemble_smtp_msgs(packets, pkt_num, output_buf, &out_len) != 0) {
+  //     printf("SMTP_重组失败,跳过\n");
+  //     continue;
        
-    }
-  }
-  else if(strcmp(protocol_name, "SIP") == 0){
-    if (reassemble_sip_msgs(packets, pkt_num, output_buf, &out_len) != 0) {
-      printf("SIP_重组失败,跳过\n");
-      continue;
+  //   }
+  // }
+  // else if(strcmp(protocol_name, "SIP") == 0){
+  //   if (reassemble_sip_msgs(packets, pkt_num, output_buf, &out_len) != 0) {
+  //     printf("SIP_重组失败,跳过\n");
+  //     continue;
        
-    }
-  }
-  if(out_len > MAX_FILE || out_len < 1) {
-    // printf("重组后的报文长度超过最大限制，跳过\n");
-    continue;
-  }
+  //   }
+  // }
+  // if(out_len > MAX_FILE || out_len < 1) {
+  //   // printf("重组后的报文长度超过最大限制，跳过\n");
+  //   continue;
+  // }
 
-  if (common_fuzz_stuff(argv, output_buf, out_len)) {
-    SEM_ACCUM_ONCE();
-    goto abandon_entry;
-  }
-  stats_load_state();
-  semantic_parse_succ = g_pkt_suc - semantic_parse_succ;
-  nf_semantic_cal_succ += semantic_parse_succ;
-  grammar_parse_succ = g_pkt_gram_suc - grammar_parse_succ;
-  nf_grammar_cal_succ += grammar_parse_succ;
-  nf_semantic_cal_total += semantic_total_sent;
-  nf_semantic_succ_ratio = (double)nf_semantic_cal_succ / (double)nf_semantic_cal_total;
-  nf_grammar_succ_ratio = (double)nf_grammar_cal_succ / (double)nf_semantic_cal_total;
-  // // Step 4: Fix the M2' according to thr LLM-generated fixer. Return fixed structured messages(M2'').
-  if(strcmp(protocol_name, "MQTT") == 0) {
-    fix_mqtt(packets, pkt_num);
-  }
-  else if(strcmp(protocol_name, "RTSP") == 0){
-    fix_rtsp(packets, pkt_num);
-  }
-  else if(strcmp(protocol_name, "FTP") == 0){
-    fix_ftp(packets, pkt_num);
-  }
-  else if(strcmp(protocol_name, "SMTP") == 0){
-    fix_smtp(packets, pkt_num);
-  }
-  else if(strcmp(protocol_name, "SIP") == 0){
-    fix_sip(packets, pkt_num);
-  }
+  // if (common_fuzz_stuff(argv, output_buf, out_len)) {
+  //   SEM_ACCUM_ONCE();
+  //   goto abandon_entry;
+  // }
+  // stats_load_state();
+  // semantic_parse_succ = g_pkt_suc - semantic_parse_succ;
+  // nf_semantic_cal_succ += semantic_parse_succ;
+  // grammar_parse_succ = g_pkt_gram_suc - grammar_parse_succ;
+  // nf_grammar_cal_succ += grammar_parse_succ;
+  // nf_semantic_cal_total += semantic_total_sent;
+  // nf_semantic_succ_ratio = (double)nf_semantic_cal_succ / (double)nf_semantic_cal_total;
+  // nf_grammar_succ_ratio = (double)nf_grammar_cal_succ / (double)nf_semantic_cal_total;
+  // // // Step 4: Fix the M2' according to thr LLM-generated fixer. Return fixed structured messages(M2'').
+  // if(strcmp(protocol_name, "MQTT") == 0) {
+  //   fix_mqtt(packets, pkt_num);
+  // }
+  // else if(strcmp(protocol_name, "RTSP") == 0){
+  //   fix_rtsp(packets, pkt_num);
+  // }
+  // else if(strcmp(protocol_name, "FTP") == 0){
+  //   fix_ftp(packets, pkt_num);
+  // }
+  // else if(strcmp(protocol_name, "SMTP") == 0){
+  //   fix_smtp(packets, pkt_num);
+  // }
+  // else if(strcmp(protocol_name, "SIP") == 0){
+  //   fix_sip(packets, pkt_num);
+  // }
   
   // stats_load_state();
-  semantic_parse_succ = g_pkt_suc;
-  grammar_parse_succ = g_pkt_gram_suc;
-  semantic_total_sent = 0;
+  // semantic_parse_succ = g_pkt_suc;
+  // grammar_parse_succ = g_pkt_gram_suc;
+  // semantic_total_sent = 0;
   // Step 5: Convert M2'' back to byte format according to the reassembly function(generated by LLM). Return byte format output(out_buf').
   memset(output_buf, 0, sizeof(output_buf));
   out_len = 0;
@@ -7495,14 +7495,14 @@ for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
     SEM_ACCUM_ONCE();
     goto abandon_entry;
   }
-  stats_load_state();
-  semantic_parse_succ = g_pkt_suc - semantic_parse_succ;
-  semantic_cal_succ += semantic_parse_succ;
-  grammar_parse_succ = g_pkt_gram_suc - grammar_parse_succ;
-  grammar_cal_succ += grammar_parse_succ;
-  semantic_cal_total += semantic_total_sent;
-  semantic_succ_ratio = (double)semantic_cal_succ / (double)semantic_cal_total;
-  grammar_succ_ratio = (double)grammar_cal_succ / (double)semantic_cal_total;
+  // stats_load_state();
+  // semantic_parse_succ = g_pkt_suc - semantic_parse_succ;
+  // semantic_cal_succ += semantic_parse_succ;
+  // grammar_parse_succ = g_pkt_gram_suc - grammar_parse_succ;
+  // grammar_cal_succ += grammar_parse_succ;
+  // semantic_cal_total += semantic_total_sent;
+  // semantic_succ_ratio = (double)semantic_cal_succ / (double)semantic_cal_total;
+  // grammar_succ_ratio = (double)grammar_cal_succ / (double)semantic_cal_total;
       /* out_buf might have been mangled a bit, so let's restore it to its
        original size and shape. */
   if (queued_paths != semantic_queue) {
