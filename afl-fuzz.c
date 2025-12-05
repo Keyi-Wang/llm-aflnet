@@ -471,6 +471,8 @@ u32 nf_semantic_cal_total = 0;
 double nf_semantic_succ_ratio = 0;
 double nf_grammar_succ_ratio = 0.0;
 static uint64_t g_sem_total_ns = 0;
+static int g_fixer_enabled = 1;  /* default fixer on */
+
 void* generate_packets_by_protocol(const char* protocol_name, int count) {
     if (strcmp(protocol_name, "MQTT") == 0) {
         return (void*) generate_mqtt_packets(count);
@@ -4565,7 +4567,7 @@ static void stats_load_state(void) {
       } else if(strcmp(protocol_name, "RTSP") == 0) {
         state = "/tmp/live555_state.txt";
       } else if(strcmp(protocol_name, "FTP") == 0) {
-        state = "/tmp/ftp_state.txt";
+        state = "/tmp/ftp_fuzz_state.txt";
       } 
     }
     snprintf(state_path, sizeof(state_path), "%s", state);
@@ -7369,10 +7371,10 @@ for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
   }
   
   // experiments: no-fixer packet valid count
-  // stats_load_state();
-  // semantic_parse_succ = g_pkt_suc;
-  // grammar_parse_succ = g_pkt_gram_suc;
-  // semantic_total_sent = 0;
+  stats_load_state();
+  semantic_parse_succ = g_pkt_suc;
+  grammar_parse_succ = g_pkt_gram_suc;
+  semantic_total_sent = 0;
   // memset(output_buf, 0, sizeof(output_buf));
   // out_len = 0;
   // if(strcmp(protocol_name, "MQTT") == 0) {
@@ -7426,21 +7428,24 @@ for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
   // nf_semantic_succ_ratio = (double)nf_semantic_cal_succ / (double)nf_semantic_cal_total;
   // nf_grammar_succ_ratio = (double)nf_grammar_cal_succ / (double)nf_semantic_cal_total;
   // // // Step 4: Fix the M2' according to thr LLM-generated fixer. Return fixed structured messages(M2'').
-  // if(strcmp(protocol_name, "MQTT") == 0) {
-  //   fix_mqtt(packets, pkt_num);
-  // }
-  // else if(strcmp(protocol_name, "RTSP") == 0){
-  //   fix_rtsp(packets, pkt_num);
-  // }
-  // else if(strcmp(protocol_name, "FTP") == 0){
-  //   fix_ftp(packets, pkt_num);
-  // }
-  // else if(strcmp(protocol_name, "SMTP") == 0){
-  //   fix_smtp(packets, pkt_num);
-  // }
-  // else if(strcmp(protocol_name, "SIP") == 0){
-  //   fix_sip(packets, pkt_num);
-  // }
+  if(g_fixer_enabled){
+    if(strcmp(protocol_name, "MQTT") == 0) {
+      fix_mqtt(packets, pkt_num);
+    }
+    else if(strcmp(protocol_name, "RTSP") == 0){
+      fix_rtsp(packets, pkt_num);
+    }
+    else if(strcmp(protocol_name, "FTP") == 0){
+      fix_ftp(packets, pkt_num);
+    }
+    else if(strcmp(protocol_name, "SMTP") == 0){
+      fix_smtp(packets, pkt_num);
+    }
+    else if(strcmp(protocol_name, "SIP") == 0){
+      fix_sip(packets, pkt_num);
+    }
+  }
+
   
   // stats_load_state();
   // semantic_parse_succ = g_pkt_suc;
@@ -7495,14 +7500,14 @@ for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
     SEM_ACCUM_ONCE();
     goto abandon_entry;
   }
-  // stats_load_state();
-  // semantic_parse_succ = g_pkt_suc - semantic_parse_succ;
-  // semantic_cal_succ += semantic_parse_succ;
-  // grammar_parse_succ = g_pkt_gram_suc - grammar_parse_succ;
-  // grammar_cal_succ += grammar_parse_succ;
-  // semantic_cal_total += semantic_total_sent;
-  // semantic_succ_ratio = (double)semantic_cal_succ / (double)semantic_cal_total;
-  // grammar_succ_ratio = (double)grammar_cal_succ / (double)semantic_cal_total;
+  stats_load_state();
+  semantic_parse_succ = g_pkt_suc - semantic_parse_succ;
+  semantic_cal_succ += semantic_parse_succ;
+  grammar_parse_succ = g_pkt_gram_suc - grammar_parse_succ;
+  grammar_cal_succ += grammar_parse_succ;
+  semantic_cal_total += semantic_total_sent;
+  semantic_succ_ratio = (double)semantic_cal_succ / (double)semantic_cal_total;
+  grammar_succ_ratio = (double)grammar_cal_succ / (double)semantic_cal_total;
       /* out_buf might have been mangled a bit, so let's restore it to its
        original size and shape. */
   if (queued_paths != semantic_queue) {
@@ -9772,7 +9777,14 @@ int main(int argc, char** argv) {
 
   if (getenv("AFL_LD_PRELOAD"))
     FATAL("Use AFL_PRELOAD instead of AFL_LD_PRELOAD");
-
+  if (getenv("FIXER_OFF"))
+  {
+    g_fixer_enabled = 0;
+    OKF("Fixer off");
+  }
+  else{
+    OKF("Fixer on");
+  }
   save_cmdline(argc, argv);
 
   fix_up_banner(argv[optind]);
