@@ -7426,21 +7426,21 @@ for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
   // nf_semantic_succ_ratio = (double)nf_semantic_cal_succ / (double)nf_semantic_cal_total;
   // nf_grammar_succ_ratio = (double)nf_grammar_cal_succ / (double)nf_semantic_cal_total;
   // // // Step 4: Fix the M2' according to thr LLM-generated fixer. Return fixed structured messages(M2'').
-  // if(strcmp(protocol_name, "MQTT") == 0) {
-  //   fix_mqtt(packets, pkt_num);
-  // }
-  // else if(strcmp(protocol_name, "RTSP") == 0){
-  //   fix_rtsp(packets, pkt_num);
-  // }
-  // else if(strcmp(protocol_name, "FTP") == 0){
-  //   fix_ftp(packets, pkt_num);
-  // }
-  // else if(strcmp(protocol_name, "SMTP") == 0){
-  //   fix_smtp(packets, pkt_num);
-  // }
-  // else if(strcmp(protocol_name, "SIP") == 0){
-  //   fix_sip(packets, pkt_num);
-  // }
+  if(strcmp(protocol_name, "MQTT") == 0) {
+    fix_mqtt(packets, pkt_num);
+  }
+  else if(strcmp(protocol_name, "RTSP") == 0){
+    fix_rtsp(packets, pkt_num);
+  }
+  else if(strcmp(protocol_name, "FTP") == 0){
+    fix_ftp(packets, pkt_num);
+  }
+  else if(strcmp(protocol_name, "SMTP") == 0){
+    fix_smtp(packets, pkt_num);
+  }
+  else if(strcmp(protocol_name, "SIP") == 0){
+    fix_sip(packets, pkt_num);
+  }
   
   // stats_load_state();
   // semantic_parse_succ = g_pkt_suc;
