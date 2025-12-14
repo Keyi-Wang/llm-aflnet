@@ -1,0 +1,3 @@
+seed_path=/home/keyi/llm-aflnet/tests/PR_mr/mr_test_seeds/mqtt_mr_test_seeds/mqtt_seq_11.raw
+mr1_ok=0
+mr2_ok=1
