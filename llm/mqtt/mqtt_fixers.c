@@ -1,6 +1,461 @@
 #include "mqtt.h"
 
-extern u32 fixed_count;
+static void sanitize_utf8_topic_filter(char *s, size_t max_len) {
+    if (!s || max_len == 0) {
+        return;
+    }
+
+    size_t i;
+    int has_nul = 0;
+
+    /* 遍历并将内容约束为 7-bit ASCII（ASCII 本身是合法 UTF-8） */
+    for (i = 0; i < max_len; ++i) {
+        unsigned char c = (unsigned char)s[i];
+
+        if (c == '\0') {
+            has_nul = 1;
+            break;
+        }
+
+        /* 控制字符（除 TAB）与 DEL 统一替换为空格 */
+        if ((c < 0x20 && c != '\t') || c == 0x7F) {
+            s[i] = ' ';
+        }
+        /* 非 ASCII 字节替换为下划线，保证结果全是 7-bit ASCII */
+        else if (c >= 0x80) {
+            s[i] = '_';
+        }
+        /* 其他可打印 ASCII 保持不变 */
+    }
+
+    /* 确保以 '\0' 结尾，若原来没有终止符则截断 */
+    if (!has_nul) {
+        s[max_len - 1] = '\0';
+    }
+}
+
+/* Common helpers for MQTT fixers */
+
+static void sanitize_utf8_string_basic(char *s, size_t max_len) {
+    if (!s || max_len == 0) {
+        return;
+    }
+
+    size_t i;
+    int found_nul = 0;
+
+    for (i = 0; i < max_len; ++i) {
+        unsigned char c = (unsigned char)s[i];
+
+        if (c == '\0') {
+            found_nul = 1;
+            break;
+        }
+
+        /* 控制字符（除 TAB）与 DEL 统一替换为空格 */
+        if ((c < 0x20 && c != '\t') || c == 0x7F) {
+            s[i] = ' ';
+        }
+        /* 非 ASCII 字节统一替换为 '_'，保证结果为 7-bit ASCII（合法 UTF-8 子集） */
+        else if (c >= 0x80) {
+            s[i] = '_';
+        }
+        /* 其他可打印 ASCII 直接保留 */
+    }
+
+    /* 若未遇到 '\0'，强制末尾终止 */
+    if (!found_nul) {
+        s[max_len - 1] = '\0';
+    } else {
+        /* 清理第一个 '\0' 之后的尾部，避免“包含 U+0000”歧义 */
+        size_t j;
+        for (j = i + 1; j < max_len; ++j) {
+            s[j] = '\0';
+        }
+    }
+}
+
+static void ensure_non_empty_string(char *s, size_t max_len, const char *fallback) {
+    if (!s || max_len == 0) {
+        return;
+    }
+    if (!fallback || fallback[0] == '\0') {
+        fallback = "t";
+    }
+    if (s[0] == '\0') {
+        (void)snprintf(s, max_len, "%s", fallback);
+    }
+}
+
+/* 去除 Topic Name 中的通配符（仅用于 Topic Name，不用于 Topic Filter） */
+static void strip_wildcards_from_topic_name(char *s, size_t max_len) {
+    if (!s || max_len == 0) {
+        return;
+    }
+    size_t i;
+    for (i = 0; i < max_len && s[i] != '\0'; ++i) {
+        if (s[i] == '+' || s[i] == '#') {
+            s[i] = '_';
+        }
+    }
+}
+
+/* -------------------------------------------------------------
+ * 1 & 12. UNSUBSCRIBE Payload MUST contain at least one Topic Filter
+ *    [MQTT-3.10.3-2]
+ * ------------------------------------------------------------- */
+void fix_unsubscribe_payload_has_topic_filter(mqtt_unsubscribe_packet_t *packets, int num_packets) {
+    if (!packets || num_packets <= 0) {
+        return;
+    }
+
+    for (int i = 0; i < num_packets; ++i) {
+        mqtt_unsubscribe_packet_t *p = &packets[i];
+
+        if (p->payload.topic_count == 0) {
+            p->payload.topic_count = 1;
+            (void)snprintf(p->payload.topic_filters[0], MAX_TOPIC_LEN, "fixed/topic");
+        } else if (p->payload.topic_count > MAX_TOPIC_FILTERS) {
+            p->payload.topic_count = MAX_TOPIC_FILTERS;
+        }
+
+        for (uint8_t j = 0; j < p->payload.topic_count && j < MAX_TOPIC_FILTERS; ++j) {
+            sanitize_utf8_string_basic(p->payload.topic_filters[j], MAX_TOPIC_LEN);
+            ensure_non_empty_string(p->payload.topic_filters[j], MAX_TOPIC_LEN, "fixed/topic");
+        }
+    }
+}
+
+/* 方便按照规范编号再调用一次（等价实现） */
+void fix_unsubscribe_payload_has_topic_filter_mqtt_3_10_3_2(mqtt_unsubscribe_packet_t *packets, int num_packets) {
+    fix_unsubscribe_payload_has_topic_filter(packets, num_packets);
+}
+
+/* -------------------------------------------------------------
+ * 2. CONNECT: protocol name MUST be the UTF-8 String "MQTT"
+ * ------------------------------------------------------------- */
+void fix_connect_protocol_name_mqtt(mqtt_connect_packet_t *packets, int num_packets) {
+    if (!packets || num_packets <= 0) {
+        return;
+    }
+
+    for (int i = 0; i < num_packets; ++i) {
+        (void)snprintf(packets[i].variable_header.protocol_name, MAX_PROTOCOL_NAME_LEN, "MQTT");
+    }
+}
+
+/* -------------------------------------------------------------
+ * 3. PUBLISH: Topic Name MUST be present and a UTF-8 Encoded String
+ * ------------------------------------------------------------- */
+void fix_publish_topic_name_utf8(mqtt_publish_packet_t *packets, int num_packets) {
+    if (!packets || num_packets <= 0) {
+        return;
+    }
+
+    for (int i = 0; i < num_packets; ++i) {
+        sanitize_utf8_string_basic(packets[i].variable_header.topic_name, MAX_TOPIC_LEN);
+        ensure_non_empty_string(packets[i].variable_header.topic_name, MAX_TOPIC_LEN, "topic/name");
+    }
+}
+
+/* -------------------------------------------------------------
+ * 4 & 16. PUBLISH Topic Name MUST NOT contain wildcard characters
+ *         (wildcards only for Topic Filters, not Topic Names)
+ * ------------------------------------------------------------- */
+void fix_publish_topic_name_no_wildcards(mqtt_publish_packet_t *packets, int num_packets) {
+    if (!packets || num_packets <= 0) {
+        return;
+    }
+
+    for (int i = 0; i < num_packets; ++i) {
+        strip_wildcards_from_topic_name(packets[i].variable_header.topic_name, MAX_TOPIC_LEN);
+        ensure_non_empty_string(packets[i].variable_header.topic_name, MAX_TOPIC_LEN, "topic/name");
+    }
+}
+
+/* 提供一个带规范号的别名，方便按规则调用 */
+void fix_publish_topic_name_no_wildcards_mqtt_4_7_0_1(mqtt_publish_packet_t *packets, int num_packets) {
+    fix_publish_topic_name_no_wildcards(packets, num_packets);
+}
+
+/* -------------------------------------------------------------
+ * 5. PUBLISH Topic Name MUST match Subscription’s Topic Filter
+ *    （需要订阅上下文，这里仅提供占位实现）
+ * ------------------------------------------------------------- */
+void fix_publish_match_subscription_filter(mqtt_publish_packet_t *packets, int num_packets) {
+    /* 无订阅列表上下文，无法在本地修正。
+     * 这里预留空实现，以便将来扩展为：
+     *   fix_publish_match_subscription_filter(packets, num_packets,
+     *                                         const mqtt_subscribe_packet_t *subs, int num_subs);
+     */
+    (void)packets;
+    (void)num_packets;
+}
+
+/* -------------------------------------------------------------
+ * 6. PUBREL Fixed Header bits 3..0 MUST be 0010 (0x2)
+ * ------------------------------------------------------------- */
+void fix_pubrel_reserved_flags(mqtt_pubrel_packet_t *packets, int num_packets) {
+    if (!packets || num_packets <= 0) {
+        return;
+    }
+
+    for (int i = 0; i < num_packets; ++i) {
+        uint8_t hdr = packets[i].fixed_header.packet_type;
+        if ((hdr >> 4) == MQTT_PUBREL) {
+            hdr = (uint8_t)((hdr & 0xF0u) | 0x02u);
+            packets[i].fixed_header.packet_type = hdr;
+        }
+    }
+}
+
+/* -------------------------------------------------------------
+ * 7. PUBREL Reason Code MUST be one of PUBREL Reason Codes
+ *    （简单策略：只允许 0x00 和 0x92，否则归一为 0x00）
+ * ------------------------------------------------------------- */
+void fix_pubrel_reason_code_valid(mqtt_pubrel_packet_t *packets, int num_packets) {
+    if (!packets || num_packets <= 0) {
+        return;
+    }
+
+    for (int i = 0; i < num_packets; ++i) {
+        uint8_t rc = packets[i].variable_header.reason_code;
+        if (rc != 0x00u && rc != 0x92u) {
+            packets[i].variable_header.reason_code = 0x00u; /* Success */
+        }
+    }
+}
+
+/* -------------------------------------------------------------
+ * 8. PUBACK Reason Code MUST be one of PUBACK Reason Codes
+ *    （简单策略：允许 {0x00, 0x10, 0x80}，否则归一为 0x00）
+ * ------------------------------------------------------------- */
+void fix_puback_reason_code_valid(mqtt_puback_packet_t *packets, int num_packets) {
+    if (!packets || num_packets <= 0) {
+        return;
+    }
+
+    for (int i = 0; i < num_packets; ++i) {
+        uint8_t rc = packets[i].variable_header.reason_code;
+        if (rc != 0x00u && rc != 0x10u && rc != 0x80u) {
+            packets[i].variable_header.reason_code = 0x00u; /* Success */
+        }
+    }
+}
+
+/* -------------------------------------------------------------
+ * 9. SUBSCRIBE Fixed Header bits 3..0 MUST be 0010 (0x2)
+ * ------------------------------------------------------------- */
+void fix_subscribe_reserved_flags(mqtt_subscribe_packet_t *packets, int num_packets) {
+    if (!packets || num_packets <= 0) {
+        return;
+    }
+
+    for (int i = 0; i < num_packets; ++i) {
+        uint8_t hdr = packets[i].fixed_header.packet_type;
+        if ((hdr >> 4) == MQTT_SUBSCRIBE) {
+            hdr = (uint8_t)((hdr & 0xF0u) | 0x02u);
+            packets[i].fixed_header.packet_type = hdr;
+        }
+    }
+}
+
+/* -------------------------------------------------------------
+ * 10. SUBSCRIBE Topic Filters MUST be UTF-8 Encoded Strings
+ * ------------------------------------------------------------- */
+void fix_subscribe_topic_filters_utf8(mqtt_subscribe_packet_t *packets, int num_packets) {
+    if (!packets || num_packets <= 0) {
+        return;
+    }
+
+    for (int i = 0; i < num_packets; ++i) {
+        mqtt_subscribe_packet_t *p = &packets[i];
+        uint8_t count = p->payload.topic_count;
+
+        if (count > MAX_TOPIC_FILTERS) {
+            count = MAX_TOPIC_FILTERS;
+            p->payload.topic_count = count;
+        }
+
+        for (uint8_t j = 0; j < count; ++j) {
+            sanitize_utf8_string_basic(p->payload.topic_filters[j].topic_filter, MAX_TOPIC_LEN);
+            ensure_non_empty_string(p->payload.topic_filters[j].topic_filter,
+                                    MAX_TOPIC_LEN, "fixed/topic");
+        }
+    }
+}
+
+/* -------------------------------------------------------------
+ * 11. SUBSCRIBE Payload MUST contain at least one Topic Filter
+ *     and Subscription Options pair
+ * ------------------------------------------------------------- */
+void fix_subscribe_payload_has_topic_pair(mqtt_subscribe_packet_t *packets, int num_packets) {
+    if (!packets || num_packets <= 0) {
+        return;
+    }
+
+    for (int i = 0; i < num_packets; ++i) {
+        mqtt_subscribe_packet_t *p = &packets[i];
+
+        if (p->payload.topic_count == 0) {
+            p->payload.topic_count = 1;
+            (void)snprintf(p->payload.topic_filters[0].topic_filter, MAX_TOPIC_LEN, "fixed/topic");
+            p->payload.topic_filters[0].qos = 0; /* QoS 0 as safe default */
+        } else if (p->payload.topic_count > MAX_TOPIC_FILTERS) {
+            p->payload.topic_count = MAX_TOPIC_FILTERS;
+        }
+
+        uint8_t count = p->payload.topic_count;
+        for (uint8_t j = 0; j < count; ++j) {
+            sanitize_utf8_string_basic(p->payload.topic_filters[j].topic_filter, MAX_TOPIC_LEN);
+            ensure_non_empty_string(p->payload.topic_filters[j].topic_filter,
+                                    MAX_TOPIC_LEN, "fixed/topic");
+        }
+    }
+}
+
+/* -------------------------------------------------------------
+ * 13. DISCONNECT Reason Code MUST be one of DISCONNECT Reason Codes
+ *      （简单策略：允许 {0x00, 0x04, 0x80}，否则归一为 0x00）
+ * ------------------------------------------------------------- */
+void fix_disconnect_reason_code_valid(mqtt_disconnect_packet_t *packets, int num_packets) {
+    if (!packets || num_packets <= 0) {
+        return;
+    }
+
+    for (int i = 0; i < num_packets; ++i) {
+        uint8_t rc = packets[i].variable_header.reason_code;
+        if (rc != 0x00u && rc != 0x04u && rc != 0x80u) {
+            packets[i].variable_header.reason_code = 0x00u; /* Normal disconnection */
+        }
+    }
+}
+
+/* -------------------------------------------------------------
+ * 14. AUTH Fixed Header bits 3..0 MUST all be 0
+ * ------------------------------------------------------------- */
+void fix_auth_reserved_flags(mqtt_auth_packet_t *packets, int num_packets) {
+    if (!packets || num_packets <= 0) {
+        return;
+    }
+
+    for (int i = 0; i < num_packets; ++i) {
+        uint8_t hdr = packets[i].fixed_header.packet_type;
+        if ((hdr >> 4) == MQTT_AUTH) {
+            hdr = (uint8_t)(hdr & 0xF0u); /* 低 4 位清零 */
+            packets[i].fixed_header.packet_type = hdr;
+        }
+    }
+}
+
+/* -------------------------------------------------------------
+ * 15. AUTH Reason Code MUST be one of Authenticate Reason Codes
+ *      （简单策略：若不在 {0x00, 0x18} 内，则归一为 0x00）
+ * ------------------------------------------------------------- */
+void fix_auth_reason_code_valid(mqtt_auth_packet_t *packets, int num_packets) {
+    if (!packets || num_packets <= 0) {
+        return;
+    }
+
+    for (int i = 0; i < num_packets; ++i) {
+        uint8_t rc = packets[i].variable_header.reason_code;
+        if (rc != 0x00u && rc != 0x18u) {
+            packets[i].variable_header.reason_code = 0x00u; /* Success / Continue */
+        }
+    }
+}
+
+/* -------------------------------------------------------------
+ * 17. All Topic Names and Topic Filters MUST be at least one char
+ * 18. MUST NOT include null character U+0000 (内部借助 C 字符串 + 清尾实现)
+ * 19. MUST NOT encode to more than 65535 bytes
+ *     （本实现中 MAX_TOPIC_LEN << 65535，天然满足；这里只保证非空 + UTF-8/ASCII）
+ * ------------------------------------------------------------- */
+
+/* 针对 PUBLISH Topic Name */
+void fix_publish_topic_name_length_and_nul(mqtt_publish_packet_t *packets, int num_packets) {
+    if (!packets || num_packets <= 0) {
+        return;
+    }
+    for (int i = 0; i < num_packets; ++i) {
+        sanitize_utf8_string_basic(packets[i].variable_header.topic_name, MAX_TOPIC_LEN);
+        ensure_non_empty_string(packets[i].variable_header.topic_name, MAX_TOPIC_LEN, "topic/name");
+    }
+}
+
+/* 针对 SUBSCRIBE / UNSUBSCRIBE 的 Topic Filters */
+void fix_sub_unsub_topic_filters_length_and_nul(mqtt_subscribe_packet_t *subs, int num_subs,
+                                                mqtt_unsubscribe_packet_t *unsubs, int num_unsubs) {
+    int i;
+
+    if (subs && num_subs > 0) {
+        for (i = 0; i < num_subs; ++i) {
+            mqtt_subscribe_packet_t *p = &subs[i];
+            if (p->payload.topic_count > MAX_TOPIC_FILTERS) {
+                p->payload.topic_count = MAX_TOPIC_FILTERS;
+            }
+            for (uint8_t j = 0; j < p->payload.topic_count; ++j) {
+                sanitize_utf8_string_basic(p->payload.topic_filters[j].topic_filter, MAX_TOPIC_LEN);
+                ensure_non_empty_string(p->payload.topic_filters[j].topic_filter,
+                                        MAX_TOPIC_LEN, "fixed/topic");
+            }
+        }
+    }
+
+    if (unsubs && num_unsubs > 0) {
+        for (i = 0; i < num_unsubs; ++i) {
+            mqtt_unsubscribe_packet_t *p = &unsubs[i];
+            if (p->payload.topic_count > MAX_TOPIC_FILTERS) {
+                p->payload.topic_count = MAX_TOPIC_FILTERS;
+            }
+            for (uint8_t j = 0; j < p->payload.topic_count; ++j) {
+                sanitize_utf8_string_basic(p->payload.topic_filters[j], MAX_TOPIC_LEN);
+                ensure_non_empty_string(p->payload.topic_filters[j],
+                                        MAX_TOPIC_LEN, "fixed/topic");
+            }
+        }
+    }
+}
+
+/* -------------------------------------------------------------
+ * 20 & 21. Shared Subscription Topic Filter:
+ *   - MUST start with "$share/"
+ *   - ShareName at least one char, MUST NOT contain "/", "+" or "#"
+ *   - MUST be followed by "/" and a Topic Filter
+ *   简化策略：所有以 "$share" 开头的过滤器重写为 "$share/group/topic"
+ * ------------------------------------------------------------- */
+void fix_subscribe_shared_subscription_filters(mqtt_subscribe_packet_t *packets, int num_packets) {
+    if (!packets || num_packets <= 0) {
+        return;
+    }
+
+    for (int i = 0; i < num_packets; ++i) {
+        mqtt_subscribe_packet_t *p = &packets[i];
+        if (p->payload.topic_count > MAX_TOPIC_FILTERS) {
+            p->payload.topic_count = MAX_TOPIC_FILTERS;
+        }
+
+        for (uint8_t j = 0; j < p->payload.topic_count; ++j) {
+            char *tf = p->payload.topic_filters[j].topic_filter;
+
+            if (!tf || tf[0] == '\0') {
+                continue;
+            }
+
+            if (strncmp(tf, "$share", 6) == 0) {
+                /* 重写为规范形式：$share/group/topic */
+                char tmp[MAX_TOPIC_LEN];
+                (void)snprintf(tmp, sizeof(tmp), "$share/group/topic");
+                (void)snprintf(tf, MAX_TOPIC_LEN, "%s", tmp);
+            }
+
+            sanitize_utf8_string_basic(tf, MAX_TOPIC_LEN);
+            ensure_non_empty_string(tf, MAX_TOPIC_LEN, "fixed/topic");
+        }
+    }
+}
+
+// extern u32 fixed_count;
 void fix_connect_packet_will_rules(mqtt_connect_packet_t *packets, int num_packets) {
     if (!packets) return;
 
@@ -900,6 +1355,43 @@ void fix_publish_all_length(mqtt_publish_packet_t *packets, int num_packets) {
         pkt->fixed_header.remaining_length = variable_header_len + pkt->payload.payload_len;
     }
 }
+
+void fix_unsubscribe_reserved_flags(mqtt_unsubscribe_packet_t *packets, int num_packets) {
+    if (!packets || num_packets <= 0) {
+        return;
+    }
+
+    for (int i = 0; i < num_packets; ++i) {
+        uint8_t hdr = packets[i].fixed_header.packet_type;
+
+        if ((hdr >> 4) == MQTT_UNSUBSCRIBE) {
+            hdr = (hdr & 0xF0) | 0x02; 
+            packets[i].fixed_header.packet_type = hdr;
+        }
+    }
+}
+
+
+
+void fix_unsubscribe_utf8_topic_filters(mqtt_unsubscribe_packet_t *packets, int num_packets) {
+    if (!packets || num_packets <= 0) {
+        return;
+    }
+
+    for (int i = 0; i < num_packets; ++i) {
+        mqtt_unsubscribe_packet_t *p = &packets[i];
+
+        uint8_t count = p->payload.topic_count;
+        if (count > MAX_TOPIC_FILTERS) {
+            count = MAX_TOPIC_FILTERS;
+        }
+
+        for (uint8_t j = 0; j < count; ++j) {
+            sanitize_utf8_topic_filter(p->payload.topic_filters[j], MAX_TOPIC_LEN);
+        }
+    }
+}
+
 void fix_unsubscribe_packet_identifier(mqtt_unsubscribe_packet_t *packets, int num_packets) {
     for (int i = 0; i < num_packets; ++i) {
         mqtt_unsubscribe_packet_t *pkt = &packets[i];
@@ -946,61 +1438,210 @@ void fix_auth_all_length(mqtt_auth_packet_t *packets, int num_packets) {
 
 
 void fix_connect(mqtt_connect_packet_t *packets, int num_packets) {
-  //fix in order to make sure that the packets are valid
-  fix_user_name_flag(packets, num_packets);
-  fix_password_flag(packets, num_packets);
-  fix_connect_all_length(packets, num_packets);
-  fix_connect_packet_will_rules(packets, num_packets);
-}
-void fix_subscribe(mqtt_subscribe_packet_t *packets, int num_packets) {
-  fix_subscribe_no_local(packets, num_packets);
-  fix_subscribe_packet_identifier(packets, num_packets);
-  fix_subscribe_packet_identifier_unique(packets, num_packets);
-  fix_subscribe_all_length(packets, num_packets);
+    if (!packets || num_packets <= 0) {
+        return;
+    }
+
+    /* MQTT-3.1.2-1: 协议名必须是 "MQTT" */
+    fix_connect_protocol_name_mqtt(packets, num_packets);
+
+    /* 原有规则：用户名 / 密码标志一致性、Will 相关规则等 */
+    fix_user_name_flag(packets, num_packets);
+    fix_password_flag(packets, num_packets);
+    fix_connect_packet_will_rules(packets, num_packets);
+
+    /* 最后修复长度字段，确保 remaining_length 等正确 */
+    fix_connect_all_length(packets, num_packets);
 }
 
-void fix_publish(mqtt_publish_packet_t *packets, int num_packets){
-  //fix in order to make sure that the packets are valid
-  fix_publish_packet_identifier(packets, num_packets);
-  fix_publish_packet_identifier_unique(packets, num_packets);
-  fix_publish_dup_flag(packets, num_packets);
-  fix_publish_qos_bits(packets, num_packets);
-  fix_publish_topic_alias(packets, num_packets, 65535); // 假设 connack_alias_max 为 65535
-  fix_publish_response_topic(packets, num_packets);
-  fix_publish_subscription_identifier(packets, num_packets);
-  fix_publish_delivery_protocol(packets, num_packets);
-  fix_publish_all_length(packets, num_packets);
+void fix_subscribe(mqtt_subscribe_packet_t *packets, int num_packets) {
+    if (!packets || num_packets <= 0) {
+        return;
+    }
+
+    /* MQTT-3.8.1-1: SUBSCRIBE 固定头低 4 bit 必须为 0x2 */
+    fix_subscribe_reserved_flags(packets, num_packets);
+
+    /* MQTT-3.8.3-2: 载荷中必须至少有一个 Topic Filter + Subscription Options 对 */
+    fix_subscribe_payload_has_topic_pair(packets, num_packets);
+
+    /* 原有：修复 no-local 等订阅选项 */
+    fix_subscribe_no_local(packets, num_packets);
+
+    /* MQTT-3.8.3-1 & MQTT-4.7.3-1/2/3: Topic Filter 为 UTF-8 字符串、非空、无 U+0000 等 */
+    fix_subscribe_topic_filters_utf8(packets, num_packets);
+    fix_sub_unsub_topic_filters_length_and_nul(packets, num_packets, NULL, 0);
+
+    /* MQTT-4.8.2-1/2: 共享订阅的 Topic Filter 形如 "$share/<ShareName>/<Filter>" */
+    fix_subscribe_shared_subscription_filters(packets, num_packets);
+
+    /* 原有：修复报文标识符（唯一性等） */
+    // fix_subscribe_packet_identifier(packets, num_packets);
+    fix_subscribe_packet_identifier_unique(packets, num_packets);
+
+    /* 最后统一修复长度字段 */
+    fix_subscribe_all_length(packets, num_packets);
+}
+
+void fix_publish(mqtt_publish_packet_t *packets, int num_packets) {
+    if (!packets || num_packets <= 0) {
+        return;
+    }
+
+    /* MQTT-3.3.2-1/2 & MQTT-4.7.0-1 & MQTT-4.7.3-1/2/3:
+     * - Topic Name 必须存在且为 UTF-8 字符串
+     * - Topic Name 中不能包含通配符 '+' / '#'
+     * - Topic Name 至少 1 字节，不含 U+0000，长度不超过实现上限
+     */
+    fix_publish_topic_name_utf8(packets, num_packets);
+    fix_publish_topic_name_no_wildcards(packets, num_packets);
+    fix_publish_topic_name_length_and_nul(packets, num_packets);
+
+    /* 原有：修复 PUBLISH 的 packet identifier 等 */
+    // fix_publish_packet_identifier(packets, num_packets);
+    fix_publish_packet_identifier_unique(packets, num_packets);
+    // fix_publish_dup_flag(packets, num_packets);
+    // fix_publish_qos_bits(packets, num_packets);
+
+    /* 原有：属性相关修复 Topic Alias / Response Topic / Subscription Identifier 等 */
+    fix_publish_topic_alias(packets, num_packets, 65535);  // 假定 connack_alias_max = 65535
+    fix_publish_response_topic(packets, num_packets);
+    fix_publish_subscription_identifier(packets, num_packets);
+    fix_publish_delivery_protocol(packets, num_packets);
+
+    /* 最后修复长度字段 */
+    fix_publish_all_length(packets, num_packets);
+
 }
 
 void fix_unsubscribe(mqtt_unsubscribe_packet_t *packets, int num_packets) {
-  fix_unsubscribe_packet_identifier(packets, num_packets);
-  fix_unsubscribe_all_length(packets, num_packets);
-    // 目前不需要修复 UNSUBSCRIBE 包
+    if (!packets || num_packets <= 0) {
+        return;
+    }
+
+    /* 之前的规则：UNSUBSCRIBE 固定头低 4 bit 必须为 0x2 */
+    fix_unsubscribe_reserved_flags(packets, num_packets);
+
+    /* MQTT-3.10.3-2 / MQTT-3.10.3-1 / MQTT-4.7.3-1/2/3:
+     * - 载荷中至少包含一个 Topic Filter
+     * - Topic Filter 为 UTF-8 字符串、非空、无 U+0000
+     */
+    fix_unsubscribe_payload_has_topic_filter(packets, num_packets);
+    fix_unsubscribe_utf8_topic_filters(packets, num_packets);
+    fix_sub_unsub_topic_filters_length_and_nul(NULL, 0, packets, num_packets);
+
+    /* 原有：报文标识符 + 长度字段修复 */
+    fix_unsubscribe_packet_identifier(packets, num_packets);
+    fix_unsubscribe_all_length(packets, num_packets);
 }
+
 void fix_auth(mqtt_auth_packet_t *packets, int num_packets) {
-  fix_auth_all_length(packets, num_packets);
-    // 目前不需要修复 AUTH 包
+    if (!packets || num_packets <= 0) {
+        return;
+    }
+
+    /* MQTT-3.15.1-1: AUTH 固定头低 4 bit 必须全为 0 */
+    fix_auth_reserved_flags(packets, num_packets);
+
+    /* MQTT-3.15.2-1: Reason Code 必须是合法的 Authenticate Reason Code */
+    fix_auth_reason_code_valid(packets, num_packets);
+
+    /* 原有：修复长度字段 */
+    fix_auth_all_length(packets, num_packets);
+}
+
+void fix_pubrel(mqtt_pubrel_packet_t *packets, int num_packets) {
+    if (!packets || num_packets <= 0) {
+        return;
+    }
+    fix_pubrel_reserved_flags(packets, num_packets);
+    fix_pubrel_reason_code_valid(packets, num_packets);
+}
+
+void fix_puback(mqtt_puback_packet_t *packets, int num_packets) {
+    if (!packets || num_packets <= 0) {
+        return;
+    }
+    /* MQTT-3.4.2-1: PUBACK Reason Code 必须合法 */
+    fix_puback_reason_code_valid(packets, num_packets);
+}
+
+void fix_pubrec(mqtt_pubrec_packet_t *packets, int num_packets) {
+    if (!packets || num_packets <= 0) {
+        return;
+    }
+
+}
+
+void fix_pubcomp(mqtt_pubcomp_packet_t *packets, int num_packets) {
+    if (!packets || num_packets <= 0) {
+        return;
+    }
+
+}
+
+void fix_pingreq(mqtt_pingreq_packet_t *packets, int num_packets) {
+    if (!packets || num_packets <= 0) {
+        return;
+    }
+
+}
+
+void fix_disconnect(mqtt_disconnect_packet_t *packets, int num_packets) {
+    if (!packets || num_packets <= 0) {
+        return;
+    }
+    /* MQTT-3.14.2-1: DISCONNECT Reason Code 必须合法 */
+    fix_disconnect_reason_code_valid(packets, num_packets);
 }
 
 void fix_mqtt(mqtt_packet_t *pkt, int num_packets) {
-    if (pkt == NULL) return;
+    if (!pkt || num_packets <= 0) {
+        return;
+    }
 
     for (int i = 0; i < num_packets; ++i) {
-        if (pkt[i].type == TYPE_CONNECT) {
-          fixed_count++; // 统计修复的 CONNECT 包数量
-          fix_connect(&pkt[i].connect, 1);  // 修复 CONNECT 包
-        } else if (pkt[i].type == TYPE_SUBSCRIBE) {
-          fixed_count++;
-          fix_subscribe(&pkt[i].subscribe, 1);  // 修复 SUBSCRIBE 包
-        } else if (pkt[i].type == TYPE_PUBLISH) {
-          fixed_count++;
-          fix_publish(&pkt[i].publish, 1);  // 修复 PUBLISH 包
-        } else if (pkt[i].type == TYPE_UNSUBSCRIBE) {
-          fixed_count++;
-          fix_unsubscribe(&pkt[i].unsubscribe, 1);  // 修复 UNSUB
-        } else if (pkt[i].type == TYPE_AUTH) {
-          fixed_count++;
-          fix_auth(&pkt[i].auth, 1);  // 修复 AUTH 包
+        switch (pkt[i].type) {
+        case TYPE_CONNECT:
+            // fixed_count++; // 统计修复的 CONNECT 包数量（若需要）
+            fix_connect(&pkt[i].connect, 1);
+            break;
+
+        case TYPE_SUBSCRIBE:
+            // fixed_count++;
+            fix_subscribe(&pkt[i].subscribe, 1);
+            break;
+
+        case TYPE_PUBLISH:
+            // fixed_count++;
+            fix_publish(&pkt[i].publish, 1);
+            break;
+
+        case TYPE_UNSUBSCRIBE:
+            // fixed_count++;
+            fix_unsubscribe(&pkt[i].unsubscribe, 1);
+            break;
+
+        case TYPE_AUTH:
+            // fixed_count++;
+            fix_auth(&pkt[i].auth, 1);
+            break;
+
+        case TYPE_PUBREL:
+            fix_pubrel(&pkt[i].pubrel, 1);
+            break;
+
+        case TYPE_PUBACK:
+            fix_puback(&pkt[i].puback, 1);
+            break;
+
+        case TYPE_DISCONNECT:
+            fix_disconnect(&pkt[i].disconnect, 1);
+            break;
+
+        default:
+
+            break;
         }
     }
 }
