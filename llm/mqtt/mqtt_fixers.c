@@ -126,10 +126,6 @@ void fix_unsubscribe_payload_has_topic_filter(mqtt_unsubscribe_packet_t *packets
     }
 }
 
-/* 方便按照规范编号再调用一次（等价实现） */
-void fix_unsubscribe_payload_has_topic_filter_mqtt_3_10_3_2(mqtt_unsubscribe_packet_t *packets, int num_packets) {
-    fix_unsubscribe_payload_has_topic_filter(packets, num_packets);
-}
 
 /* -------------------------------------------------------------
  * 2. CONNECT: protocol name MUST be the UTF-8 String "MQTT"
