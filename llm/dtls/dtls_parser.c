@@ -20,21 +20,7 @@
 static u16 rd_u16(const u8 *p) { return (u16)(((u16)p[0] << 8) | (u16)p[1]); }
 static u32 rd_u24(const u8 *p) { return ((u32)p[0] << 16) | ((u32)p[1] << 8) | (u32)p[2]; }
 
-static void wr_u16(u8 *p, u16 v) { p[0] = (u8)(v >> 8); p[1] = (u8)(v & 0xff); }
-static void wr_u24(u8 *p, u32 v) { p[0] = (u8)((v >> 16) & 0xff); p[1] = (u8)((v >> 8) & 0xff); p[2] = (u8)(v & 0xff); }
-
-static u32 rd_u24b(const uint24_t v) { return ((u32)v.b[0] << 16) | ((u32)v.b[1] << 8) | (u32)v.b[2]; }
-static void set_u24b(uint24_t *v, u32 x) { v->b[0] = (u8)((x >> 16) & 0xff); v->b[1] = (u8)((x >> 8) & 0xff); v->b[2] = (u8)(x & 0xff); }
-
 static void set_zero(void *p, size_t n) { if (p && n) memset(p, 0, n); }
-
-/* Safe copy into fixed-cap arrays: return -1 on overflow */
-static int copy_cap(u8 *dst, u32 cap, const u8 *src, u32 n) {
-    if (n > cap) return -1;
-    if (n && (!dst || !src)) return -1;
-    if (n) memcpy(dst, src, n);
-    return 0;
-}
 
 /* ---------------- parsing: body-specific ---------------- */
 
@@ -82,9 +68,13 @@ static int parse_client_hello(const u8 *body, u32 body_len, dtls_client_hello_t 
     o += ch->compression_methods_len;
 
     /* extensions (optional in TLS; but common) */
-    ch->extensions.total_len = 0;
-    if (o == body_len) return 0; /* no extensions */
+    if (o == body_len) {
+        ch->extensions.present = 0;          
+        ch->extensions.total_len = 0;
+        return 0;
+    }
     if (o + 2 > body_len) return -1;
+    ch->extensions.present = 1;    
     ch->extensions.total_len = rd_u16(body + o); o += 2;
     if (ch->extensions.total_len > DTLS_MAX_EXTENSIONS_LEN) return -1;
     if (o + ch->extensions.total_len > body_len) return -1;
@@ -114,8 +104,13 @@ static int parse_server_hello(const u8 *body, u32 body_len, dtls_server_hello_t 
     sh->cipher_suite = rd_u16(body + o); o += 2;
     sh->compression_method = body[o++];
 
-    sh->extensions.total_len = 0;
-    if (o == body_len) return 0;
+    /* extensions (optional in TLS; but common) */
+    if (o == body_len) {
+        sh->extensions.present = 0;          
+        sh->extensions.total_len = 0;
+        return 0;
+    }
+    sh->extensions.present = 1;  
     if (o + 2 > body_len) return -1;
     sh->extensions.total_len = rd_u16(body + o); o += 2;
     if (sh->extensions.total_len > DTLS_MAX_EXTENSIONS_LEN) return -1;
@@ -295,6 +290,9 @@ size_t parse_dtls_msg(const u8 *buf, u32 buf_len, dtls_packet_t *out_packets, u3
             case 16: ok = parse_client_key_exchange(body, h_body_len, &pkt->payload.handshake.body.client_key_exchange); break;
             case 15: ok = parse_certificate_verify(body, h_body_len, &pkt->payload.handshake.body.certificate_verify); break;
             case 20: ok = parse_finished_plain(body, h_body_len, &pkt->payload.handshake.body.finished); break;
+            case 14: /* ServerHelloDone */
+                ok = (h_body_len == 0) ? 0 : -1;
+                break;
             default:
                 ok = -1;
                 break;

@@ -84,6 +84,7 @@ typedef struct {
 typedef struct {
     uint16_t total_len;
     uint8_t  raw[DTLS_MAX_EXTENSIONS_LEN];
+    uint8_t  present; 
 } dtls_extensions_block_t;
 
 /* ---- ClientHello ---- */

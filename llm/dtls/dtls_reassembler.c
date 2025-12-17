@@ -117,12 +117,14 @@ static int serialize_handshake_body(const dtls_packet_t *pkt, u8 *tmp, u32 tmp_c
         memcpy(tmp + o, ch->compression_methods, ch->compression_methods_len);
         o += ch->compression_methods_len;
 
-        if (ch->extensions.total_len > DTLS_MAX_EXTENSIONS_LEN) return -1;
-        if (o + 2 + ch->extensions.total_len > tmp_cap) return -1;
-        tmp[o++] = (u8)(ch->extensions.total_len >> 8);
-        tmp[o++] = (u8)(ch->extensions.total_len & 0xff);
-        memcpy(tmp + o, ch->extensions.raw, ch->extensions.total_len);
-        o += ch->extensions.total_len;
+        if (ch->extensions.present) {
+            if (ch->extensions.total_len > DTLS_MAX_EXTENSIONS_LEN) return -1;
+            if (o + 2 + ch->extensions.total_len > tmp_cap) return -1;
+            tmp[o++] = (u8)(ch->extensions.total_len >> 8);
+            tmp[o++] = (u8)(ch->extensions.total_len & 0xff);
+            memcpy(tmp + o, ch->extensions.raw, ch->extensions.total_len);
+            o += ch->extensions.total_len;
+        }
 
         break;
     }
@@ -145,12 +147,14 @@ static int serialize_handshake_body(const dtls_packet_t *pkt, u8 *tmp, u32 tmp_c
         tmp[o++] = (u8)(sh->cipher_suite & 0xff);
         tmp[o++] = sh->compression_method;
 
-        if (sh->extensions.total_len > DTLS_MAX_EXTENSIONS_LEN) return -1;
-        if (o + 2 + sh->extensions.total_len > tmp_cap) return -1;
-        tmp[o++] = (u8)(sh->extensions.total_len >> 8);
-        tmp[o++] = (u8)(sh->extensions.total_len & 0xff);
-        memcpy(tmp + o, sh->extensions.raw, sh->extensions.total_len);
-        o += sh->extensions.total_len;
+        if (sh->extensions.present) {
+            if (sh->extensions.total_len > DTLS_MAX_EXTENSIONS_LEN) return -1;
+            if (o + 2 + sh->extensions.total_len > tmp_cap) return -1;
+            tmp[o++] = (u8)(sh->extensions.total_len >> 8);
+            tmp[o++] = (u8)(sh->extensions.total_len & 0xff);
+            memcpy(tmp + o, sh->extensions.raw, sh->extensions.total_len);
+            o += sh->extensions.total_len;
+        }
 
         break;
     }
@@ -252,8 +256,18 @@ static int serialize_handshake_body(const dtls_packet_t *pkt, u8 *tmp, u32 tmp_c
         o += DTLS_VERIFY_DATA_LEN;
         break;
     }
-    default:
-        return -1;
+    case 14: { /* ServerHelloDone*/
+        *body_len_out = 0;
+        return 0;
+    }
+
+    default: {
+        u32 l = pkt->payload.handshake.raw_body_len; 
+        if (l > tmp_cap) return -1;
+        if (l) memcpy(tmp, pkt->payload.handshake.raw_body, l);
+        *body_len_out = l;
+        return 0;
+    }
     }
 
     *body_len_out = o;
