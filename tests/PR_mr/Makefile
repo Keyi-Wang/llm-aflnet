@@ -29,10 +29,10 @@ OBJS := mr_test.o
 ifeq ($(wildcard adapters/$(PROTO)_adapter.c),)
 
   ifeq ($(PARSE_SYM),)
-    PARSE_SYM := $(PROTO)_parse
+    PARSE_SYM := parse_$(PROTO)_msg
   endif
   ifeq ($(REASM_SYM),)
-    REASM_SYM := $(PROTO)_reassemble
+    REASM_SYM := reassemble_$(PROTO)_msgs
   endif
   CFLAGS := $(CFLAGS_BASE) -DPARSE_SYM=$(PARSE_SYM) -DREASM_SYM=$(REASM_SYM)
   OBJS += generic_adapter.o

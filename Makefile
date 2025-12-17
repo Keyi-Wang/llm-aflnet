@@ -67,6 +67,13 @@ sip_SRC = llm/sip/sip_init.c \
               llm/sip/sip_reassembler.c
 sip_OBJ = $(sip_SRC:.c=.o)
 
+dtls_SRC = llm/dtls/dtls_init.c \
+              llm/dtls/dtls_parser.c \
+              llm/dtls/dtls_mutators.c \
+              llm/dtls/dtls_fixers.c \
+              llm/dtls/dtls_reassembler.c
+dtls_OBJ = $(dtls_SRC:.c=.o)
+
 ifneq "$(filter Linux GNU%,$(shell uname))" ""
   LDFLAGS  += -ldl -lgvc -lcgraph -lm -lcap
 endif
@@ -104,8 +111,8 @@ afl-as: afl-as.c afl-as.h $(COMM_HDR) | test_x86
 	$(CC) $(CFLAGS) $@.c -o $@ $(LDFLAGS)
 	ln -sf afl-as as
 
-afl-fuzz: afl-fuzz.c $(COMM_HDR) aflnet.o aflnet.h $(MQTT_OBJ) $(RTSP_OBJ) $(ftp_OBJ) $(smtp_OBJ) $(sip_OBJ) | test_x86  
-	$(CC) $(CFLAGS) $@.c aflnet.o $(MQTT_OBJ) $(RTSP_OBJ) $(ftp_OBJ) $(smtp_OBJ) $(sip_OBJ) -o $@ $(LDFLAGS)  
+afl-fuzz: afl-fuzz.c $(COMM_HDR) aflnet.o aflnet.h $(MQTT_OBJ) $(RTSP_OBJ) $(ftp_OBJ) $(smtp_OBJ) $(sip_OBJ) $(dtls_OBJ) | test_x86   
+	$(CC) $(CFLAGS) $@.c aflnet.o $(MQTT_OBJ) $(RTSP_OBJ) $(ftp_OBJ) $(smtp_OBJ) $(sip_OBJ) $(dtls_OBJ) -o $@ $(LDFLAGS)   
 
 afl-replay: afl-replay.c $(COMM_HDR) aflnet.o aflnet.h | test_x86
 	$(CC) $(CFLAGS) $@.c aflnet.o -o $@ $(LDFLAGS)

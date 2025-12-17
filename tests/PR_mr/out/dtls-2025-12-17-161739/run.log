@@ -1,0 +1,4 @@
+[FAIL] /home/wky/llm-aflnet/tests/PR_mr/mr_test_seeds/dtls_mr_test_seeds/seed2_cookie_exchange.raw
+[FAIL] /home/wky/llm-aflnet/tests/PR_mr/mr_test_seeds/dtls_mr_test_seeds/seed3_ecc_client.raw
+[FAIL] /home/wky/llm-aflnet/tests/PR_mr/mr_test_seeds/dtls_mr_test_seeds/seed1_client_hello.raw
+[FAIL] /home/wky/llm-aflnet/tests/PR_mr/mr_test_seeds/dtls_mr_test_seeds/seed4_psk_client.raw
