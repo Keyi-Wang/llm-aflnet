@@ -83,6 +83,7 @@
 #include "llm/ftp/ftp.h"
 #include "llm/smtp/smtp.h"
 #include "llm/sip/sip.h"
+#include "llm/dtls/dtls.h"
 
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined (__OpenBSD__)
 #  include <sys/sysctl.h>
@@ -482,6 +483,8 @@ void* generate_packets_by_protocol(const char* protocol_name, int count) {
         return (void*) generate_smtp_packets(count);
     } else if (strcmp(protocol_name, "SIP") == 0) {
         return (void*) generate_sip_packets(count);
+    } else if(strcmp(protocol_name, "DTLS") == 0){
+        return (void*) generate_dtls_packets(count);
     }
     else {
         fprintf(stderr, "Unsupported protocol: %s\n", protocol_name);
@@ -7305,6 +7308,9 @@ else if(strcmp(protocol_name, "SMTP") == 0){
 else if(strcmp(protocol_name, "SIP") == 0){
   pkt_num = parse_sip_msg(out_buf, len, (sip_packet_t*)packets, 105);
 }
+else if(strcmp(protocol_name, "DTLS") == 0){
+  pkt_num = parse_dtls_msg(out_buf, len, (dtls_packet_t*)packets, 105);
+}
 else{
   // printf("Unsupported Protocol: %s\n", protocol_name);
   goto real_havoc_stage;
@@ -7366,6 +7372,9 @@ for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
   }
   else if(strcmp(protocol_name, "SIP") == 0){
     dispatch_sip_multiple_mutations(packets, pkt_num, rounds);
+  }
+  else if(strcmp(protocol_name, "DTLS") == 0){
+    dispatch_dtls_multiple_mutations(packets, pkt_num, rounds);
   }
   
   // experiments: no-fixer packet valid count
@@ -7441,7 +7450,10 @@ for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
   else if(strcmp(protocol_name, "SIP") == 0){
     fix_sip(packets, pkt_num);
   }
-  
+  else if(strcmp(protocol_name, "DTLS") == 0){
+    fix_dtls(packets, pkt_num);
+  }
+
   // stats_load_state();
   // semantic_parse_succ = g_pkt_suc;
   // grammar_parse_succ = g_pkt_gram_suc;
@@ -7482,6 +7494,11 @@ for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
       // printf("SIP_重组失败,跳过\n");
       continue;
        
+    }
+  }
+  else if(strcmp(protocol_name, "DTLS") == 0){
+    if (reassemble_dtls_msgs(packets, pkt_num, output_buf, &out_len) != 0) {
+      continue;
     }
   }
   // printf("pkt_num: %zu\n", pkt_num);
