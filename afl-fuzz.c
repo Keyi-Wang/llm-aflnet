@@ -483,7 +483,7 @@ void* generate_packets_by_protocol(const char* protocol_name, int count) {
         return (void*) generate_smtp_packets(count);
     } else if (strcmp(protocol_name, "SIP") == 0) {
         return (void*) generate_sip_packets(count);
-    } else if(strcmp(protocol_name, "DTLS") == 0){
+    } else if(strcmp(protocol_name, "DTLS12") == 0){
         return (void*) generate_dtls_packets(count);
     }
     else {
@@ -7308,7 +7308,7 @@ else if(strcmp(protocol_name, "SMTP") == 0){
 else if(strcmp(protocol_name, "SIP") == 0){
   pkt_num = parse_sip_msg(out_buf, len, (sip_packet_t*)packets, 105);
 }
-else if(strcmp(protocol_name, "DTLS") == 0){
+else if(strcmp(protocol_name, "DTLS12") == 0){
   pkt_num = parse_dtls_msg(out_buf, len, (dtls_packet_t*)packets, 105);
 }
 else{
@@ -7373,7 +7373,7 @@ for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
   else if(strcmp(protocol_name, "SIP") == 0){
     dispatch_sip_multiple_mutations(packets, pkt_num, rounds);
   }
-  else if(strcmp(protocol_name, "DTLS") == 0){
+  else if(strcmp(protocol_name, "DTLS12") == 0){
     dispatch_dtls_multiple_mutations(packets, pkt_num, rounds);
   }
   
@@ -7450,7 +7450,7 @@ for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
   else if(strcmp(protocol_name, "SIP") == 0){
     fix_sip(packets, pkt_num);
   }
-  else if(strcmp(protocol_name, "DTLS") == 0){
+  else if(strcmp(protocol_name, "DTLS12") == 0){
     fix_dtls(packets, pkt_num);
   }
 
@@ -7496,7 +7496,7 @@ for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
        
     }
   }
-  else if(strcmp(protocol_name, "DTLS") == 0){
+  else if(strcmp(protocol_name, "DTLS12") == 0){
     if (reassemble_dtls_msgs(packets, pkt_num, output_buf, &out_len) != 0) {
       continue;
     }
@@ -9627,6 +9627,7 @@ int main(int argc, char** argv) {
         } else if (!strcmp(optarg, "DTLS12")) {
           extract_requests = &extract_requests_dtls12;
           extract_response_codes = &extract_response_codes_dtls12;
+          protocol_name = "DTLS12";
         } else if (!strcmp(optarg, "DNS")) {
           extract_requests = &extract_requests_dns;
           extract_response_codes = &extract_response_codes_dns;
