@@ -576,57 +576,146 @@ void fix_password_flag(mqtt_connect_packet_t *packets, int num_packets) {
     }
 }
 
+/* ===================== fixer_sanity helpers ===================== */
+/* NOTE: CONNECT will properties are a raw byte array; it may legitimately end with 0x00.
+ * Never infer length via "last non-zero byte". Use best-effort property framing instead.
+ */
+static size_t u8_strnlen0(const uint8_t *p, size_t cap) {
+    if (!p) return 0;
+    for (size_t i = 0; i < cap; i++) {
+        if (p[i] == 0) return i;
+    }
+    return cap;
+}
+
+static int rd_u16_be_ok_local(const uint8_t *p, uint32_t j, uint32_t cap, uint16_t *out) {
+    if (!p || !out) return 0;
+    if (j + 2 > cap) return 0;
+    *out = (uint16_t)(((uint16_t)p[j] << 8) | (uint16_t)p[j + 1]);
+    return 1;
+}
+
+/* Best-effort parser for MQTT v5 Will Properties (subset sufficient for our fixers/tests).
+ * Returns a derived length within [0, cap]. Stops on unknown/truncated property or 0 padding.
+ */
+static uint32_t best_effort_will_props_len(const uint8_t *p, uint32_t cap) {
+    if (!p || cap == 0) return 0;
+    uint32_t j = 0;
+    while (j < cap) {
+        uint8_t id = p[j];
+        if (id == 0) break; /* treat zero padding as end */
+        j++;
+
+        switch (id) {
+            case 0x01: /* Payload Format Indicator: 1 byte */
+                if (j + 1 > cap) return (j - 1);
+                j += 1;
+                break;
+            case 0x02: /* Message Expiry Interval: 4 bytes */
+            case 0x18: /* Will Delay Interval: 4 bytes */
+                if (j + 4 > cap) return (j - 1);
+                j += 4;
+                break;
+            case 0x03: /* Content Type: UTF-8 (2B len + data) */
+            case 0x08: { /* Response Topic: UTF-8 (2B len + data) */
+                uint16_t n = 0;
+                if (!rd_u16_be_ok_local(p, j, cap, &n)) return (j - 1);
+                j += 2;
+                if (j + (uint32_t)n > cap) return (j - 3);
+                j += (uint32_t)n;
+                break;
+            }
+            case 0x09: { /* Correlation Data: binary (2B len + data) */
+                uint16_t n = 0;
+                if (!rd_u16_be_ok_local(p, j, cap, &n)) return (j - 1);
+                j += 2;
+                if (j + (uint32_t)n > cap) return (j - 3);
+                j += (uint32_t)n;
+                break;
+            }
+            case 0x26: { /* User Property: UTF-8 pair */
+                uint16_t k = 0, v = 0;
+                if (!rd_u16_be_ok_local(p, j, cap, &k)) return (j - 1);
+                j += 2;
+                if (j + (uint32_t)k > cap) return (j - 3);
+                j += (uint32_t)k;
+
+                if (!rd_u16_be_ok_local(p, j, cap, &v)) return (j - 1);
+                j += 2;
+                if (j + (uint32_t)v > cap) return (j - 3);
+                j += (uint32_t)v;
+                break;
+            }
+            default:
+                /* unknown property id -> stop before this property */
+                return (j - 1);
+        }
+    }
+    return j;
+}
+/* =============================================================== */
+
 
 void fix_connect_all_length(mqtt_connect_packet_t *packets, int num_packets) {
+    if (!packets || num_packets <= 0) return;
+
     for (int i = 0; i < num_packets; ++i) {
         mqtt_connect_packet_t *pkt = &packets[i];
 
-        // // 修复 variable header 的 property_len（属性实际长度）
-        // pkt->variable_header.property_len = strlen((char *)pkt->variable_header.properties);
+        /* Flags are a packed byte in this codebase (not a bitfield struct). */
+        const uint8_t flags = (uint8_t)pkt->variable_header.connect_flags;
+        const uint8_t will_flag     = (uint8_t)((flags >> 2) & 0x01u);
+        const uint8_t username_flag = (uint8_t)((flags >> 7) & 0x01u);
+        const uint8_t password_flag = (uint8_t)((flags >> 6) & 0x01u);
 
-        // 修复 will_property_len
-        // pkt->payload.will_property_len = strlen((char *)pkt->payload.will_properties);
-        for (int j = MAX_PROPERTIES_LEN - 1; j >= 0; --j) {
-            if (pkt->payload.will_properties[j] != 0) {
-                pkt->payload.will_property_len = j + 1;
-                break;
+        /* ---- derive binary lengths (best-effort) ----
+         * IMPORTANT:
+         *  - Will properties/payload may legitimately end with 0x00, so don't use "last non-zero".
+         *  - If Will Flag is 0, do NOT try to infer will lengths from stale bytes.
+         */
+        if (!will_flag) {
+            pkt->payload.will_property_len = 0;
+            pkt->payload.will_payload_len  = 0;
+        } else {
+            if (pkt->payload.will_property_len == 0 && pkt->payload.will_properties[0] != 0) {
+                pkt->payload.will_property_len =
+                    best_effort_will_props_len(pkt->payload.will_properties, (uint32_t)MAX_PROPERTIES_LEN);
             }
-        }
-        // 修复 will_payload_len
-        for (int j = MAX_PAYLOAD_LEN - 1; j >= 0; --j) {
-            if (pkt->payload.will_payload[j] != 0) {
-                pkt->payload.will_payload_len = j + 1;
-                break;
-            }
-        }
-
-        // 修复 password_len
-        for (int j = MAX_PASSWORD_LEN - 1; j >= 0; --j) {
-            if (pkt->payload.password[j] != 0) {
-                pkt->payload.password_len = j + 1;
-                break;
+            if (pkt->payload.will_payload_len == 0 && pkt->payload.will_payload[0] != 0) {
+                pkt->payload.will_payload_len =
+                    (uint16_t)u8_strnlen0(pkt->payload.will_payload, (size_t)MAX_PAYLOAD_LEN);
             }
         }
 
-        // 修复 remaining_length
+        if (!password_flag) {
+            pkt->payload.password_len = 0;
+        } else {
+            if (pkt->payload.password_len == 0 && pkt->payload.password[0] != 0) {
+                pkt->payload.password_len =
+                    (uint16_t)u8_strnlen0(pkt->payload.password, (size_t)MAX_PASSWORD_LEN);
+            }
+        }
+
+        /* ---- compute remaining_length (as this fixer intended) ---- */
         size_t variable_header_len = 0;
-        variable_header_len += 2 + strlen(pkt->variable_header.protocol_name); // protocol_name with 2-byte length
-        variable_header_len += 1; // protocol_level
-        variable_header_len += 1; // connect_flags
-        variable_header_len += 2; // keep_alive
+        variable_header_len += 2 + strlen(pkt->variable_header.protocol_name); /* protocol_name with 2-byte length */
+        variable_header_len += 1; /* protocol_level */
+        variable_header_len += 1; /* connect_flags */
+        variable_header_len += 2; /* keep_alive */
         variable_header_len += pkt->variable_header.property_len;
 
         size_t payload_len = 0;
         payload_len += 2 + strlen(pkt->payload.client_id);
-        if (((pkt->variable_header.connect_flags >> 2) & 0x01)) { // Will Flag
+
+        if (will_flag) {
             payload_len += pkt->payload.will_property_len;
             payload_len += 2 + strlen(pkt->payload.will_topic);
             payload_len += 2 + pkt->payload.will_payload_len;
         }
-        if (((pkt->variable_header.connect_flags >> 7) & 0x01)) { // Username Flag
+        if (username_flag) {
             payload_len += 2 + strlen(pkt->payload.user_name);
         }
-        if (((pkt->variable_header.connect_flags >> 6) & 0x01)) { // Password Flag
+        if (password_flag) {
             payload_len += 2 + pkt->payload.password_len;
         }
 
@@ -1317,20 +1406,19 @@ void fix_subscribe_all_length(mqtt_subscribe_packet_t *packets, int num_packets)
     for (int i = 0; i < num_packets; ++i) {
         mqtt_subscribe_packet_t *pkt = &packets[i];
 
-        // 修复 variable header 的 property_len（属性实际长度）
-        // pkt->variable_header.property_len = strlen((char *)pkt->variable_header.properties);
-
-        // 修复 remaining_length
-        size_t variable_header_len = 2 + pkt->variable_header.property_len; // packet_identifier + properties
+        /* 修复 remaining_length */
+        size_t variable_header_len = 2 + pkt->variable_header.property_len; /* packet_identifier + properties */
         size_t payload_len = 0;
 
         for (int j = 0; j < pkt->payload.topic_count; ++j) {
-            payload_len += strlen(pkt->payload.topic_filters[j].topic_filter) + 1; // topic_filter + qos byte
+            /* Each Topic Filter is encoded as: 2B length + bytes + 1B subscription options */
+            payload_len += 2 + strlen(pkt->payload.topic_filters[j].topic_filter) + 1;
         }
 
         pkt->fixed_header.remaining_length = variable_header_len + payload_len;
     }
 }
+
 
 void fix_publish_all_length(mqtt_publish_packet_t *packets, int num_packets) {
     for (int i = 0; i < num_packets; ++i) {
