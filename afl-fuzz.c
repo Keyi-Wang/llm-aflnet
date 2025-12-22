@@ -3004,17 +3004,17 @@ EXP_ST void init_forkserver(char** argv) {
 
     setsid();
 
-    char log_path[512];
-    snprintf(log_path, sizeof(log_path), "%s/mosquitto_log.txt", out_dir);
-    int log_fd = open(log_path, O_CREAT | O_WRONLY | O_APPEND, 0644);
-    if (log_fd >= 0) {
-        dup2(log_fd, 1); // 重定向 stdout
-        dup2(log_fd, 2); // 重定向 stderr
-    } else {
-        // 若打开失败，仍使用 /dev/null
-        dup2(dev_null_fd, 1);
-        dup2(dev_null_fd, 2);
-    }
+    // char log_path[512];
+    // snprintf(log_path, sizeof(log_path), "%s/mosquitto_log.txt", out_dir);
+    // int log_fd = open(log_path, O_CREAT | O_WRONLY | O_APPEND, 0644);
+    // if (log_fd >= 0) {
+    //     dup2(log_fd, 1); // 重定向 stdout
+    //     dup2(log_fd, 2); // 重定向 stderr
+    // } else {
+    //     // 若打开失败，仍使用 /dev/null
+    //     dup2(dev_null_fd, 1);
+    //     dup2(dev_null_fd, 2);
+    // }
 
 
 
