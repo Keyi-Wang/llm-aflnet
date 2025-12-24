@@ -9797,7 +9797,22 @@ int main(int argc, char** argv) {
 
   if (getenv("AFL_LD_PRELOAD"))
     FATAL("Use AFL_PRELOAD instead of AFL_LD_PRELOAD");
-
+  if (getenv("FIXER_OFF"))
+  {
+    g_fixer_enabled = 0;
+    OKF("Fixer off");
+  }
+  else{
+    OKF("Fixer on");
+  }
+    if (getenv("HAVOC_OFF"))
+  {
+    skip_havoc = 1;
+    OKF("Havoc off");
+  }
+  else{
+    OKF("Havoc on");
+  }
   save_cmdline(argc, argv);
 
   fix_up_banner(argv[optind]);
