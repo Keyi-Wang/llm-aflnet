@@ -472,6 +472,9 @@ u32 nf_semantic_cal_total = 0;
 double nf_semantic_succ_ratio = 0;
 double nf_grammar_succ_ratio = 0.0;
 static uint64_t g_sem_total_ns = 0;
+static int g_fixer_enabled = 1;  /* default fixer on */
+static int skip_havoc = 0;  /* skip havoc stage */
+
 void* generate_packets_by_protocol(const char* protocol_name, int count) {
     if (strcmp(protocol_name, "MQTT") == 0) {
         return (void*) generate_mqtt_packets(count);
@@ -7435,23 +7438,25 @@ for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
   // nf_semantic_succ_ratio = (double)nf_semantic_cal_succ / (double)nf_semantic_cal_total;
   // nf_grammar_succ_ratio = (double)nf_grammar_cal_succ / (double)nf_semantic_cal_total;
   // // // Step 4: Fix the M2' according to thr LLM-generated fixer. Return fixed structured messages(M2'').
-  if(strcmp(protocol_name, "MQTT") == 0) {
-    fix_mqtt(packets, pkt_num);
-  }
-  else if(strcmp(protocol_name, "RTSP") == 0){
-    fix_rtsp(packets, pkt_num);
-  }
-  else if(strcmp(protocol_name, "FTP") == 0){
-    fix_ftp(packets, pkt_num);
-  }
-  else if(strcmp(protocol_name, "SMTP") == 0){
-    fix_smtp(packets, pkt_num);
-  }
-  else if(strcmp(protocol_name, "SIP") == 0){
-    fix_sip(packets, pkt_num);
-  }
-  else if(strcmp(protocol_name, "DTLS12") == 0){
-    fix_dtls(packets, pkt_num);
+  if(g_fixer_enabled){
+    if(strcmp(protocol_name, "MQTT") == 0) {
+      fix_mqtt(packets, pkt_num);
+    }
+    else if(strcmp(protocol_name, "RTSP") == 0){
+      fix_rtsp(packets, pkt_num);
+    }
+    else if(strcmp(protocol_name, "FTP") == 0){
+      fix_ftp(packets, pkt_num);
+    }
+    else if(strcmp(protocol_name, "SMTP") == 0){
+      fix_smtp(packets, pkt_num);
+    }
+    else if(strcmp(protocol_name, "SIP") == 0){
+      fix_sip(packets, pkt_num);
+    }
+    else if(strcmp(protocol_name, "DTLS12") == 0){
+      fix_dtls(packets, pkt_num);
+    }
   }
 
   // stats_load_state();
@@ -7546,7 +7551,9 @@ g_sem_total_ns += (sem_now_ns() - __t0_sem);  /* 退出累加 */
 free(packets);
 free(seed_pkts);
 real_havoc_stage:
-  // goto abandon_entry;
+  if(skip_havoc){
+    goto abandon_entry;
+  }
   /* If we get here, we're about to enter the havoc stage. */
   stage_cur_byte = -1;
 
