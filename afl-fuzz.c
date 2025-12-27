@@ -466,6 +466,9 @@ u32 grammar_parse_succ = 0;
 u32 grammar_cal_succ = 0;
 u32 semantic_cal_succ = 0;
 u32 semantic_cal_total = 0;
+u32 exec_succ = 0;
+u32 exec_succ_total = 0;
+double exec_succ_ratio = 0;
 double semantic_succ_ratio = 0;
 double grammar_succ_ratio = 0.0;
 u32 nf_semantic_total_sent = 0;
@@ -482,8 +485,9 @@ static int skip_havoc = 0;  /* skip havoc stage */
 
 
 static _Atomic uint64_t g_pkt_total = 0;
-static _Atomic uint64_t g_pkt_suc = 0;
+static _Atomic uint64_t g_pkt_sem_suc = 0;
 static _Atomic uint64_t g_pkt_gram_suc = 0;
+static _Atomic uint64_t g_pkt_suc = 0;
 static int   stats_fd   = -1;                 // CSV 追加日志（可选）
 static char  stats_path[512];                 // CSV 路径
 static char  state_path[512];                 // 累计状态文件
@@ -4632,11 +4636,12 @@ static void stats_load_state(void) {
 
     FILE *fp = fopen(state_path, "r");
     if (!fp) return; // 首次运行，没有就算了
-    uint64_t t=0, e=0, r=0, g=0;
-    if (fscanf(fp, "%" SCNu64 " %" SCNu64 " %" SCNu64, &t, &r, &g) == 3) {
+    uint64_t t=0, s=0, r=0, g=0;
+    if (fscanf(fp, "%" SCNu64 " %" SCNu64 " %" SCNu64 " %" SCNu64, &t, &r, &g, &s) == 4) {
         atomic_store(&g_pkt_total, t);
-        atomic_store(&g_pkt_suc, r);
+        atomic_store(&g_pkt_sem_suc, r);
         atomic_store(&g_pkt_gram_suc, g);
+        atomic_store(&g_pkt_suc, s);
     }
     fclose(fp);
 }
@@ -4705,18 +4710,18 @@ static void maybe_update_plot_file(double bitmap_cvg, double eps) {
   else{
     M2_total_cnt = g_pkt_total;
   }
-  double ratio1 = (double)g_pkt_suc / (double)(M2_total_cnt ? M2_total_cnt : 1);
+  double ratio0 = (double)g_pkt_suc / (double)(M2_total_cnt ? M2_total_cnt : 1);
+  double ratio1 = (double)g_pkt_sem_suc / (double)(M2_total_cnt ? M2_total_cnt : 1);
   double ratio2 = (double)g_pkt_gram_suc / (double)(M2_total_cnt ? M2_total_cnt : 1);
   fprintf(plot_file,
-        "%llu, %llu, %u, %u, %u, %u, %0.02f%%, %llu, %llu, %u, %0.02f, %u, %u, %u, %llu, %llu, %u, %u, %u, %.3f, %u, %u, %u, %.3f, %.3f, %u, %u, %u, %.3f, %.3f\n",
+        "%llu, %llu, %u, %u, %u, %u, %0.02f%%, %llu, %llu, %u, %0.02f, %u, %u, %u, %.3f, %u, %u, %u, %u, %.3f, %.3f, %.3f, %u, %u, %u, %u, %.3f, %.3f, %.3f\n",
         get_cur_time() / 1000, queue_cycle - 1, current_entry, queued_paths,
         pending_not_fuzzed, pending_favored, bitmap_cvg, unique_crashes,
-        unique_hangs, max_depth, eps, M2_start_region_ID, M2_region_count,
-        region_cnt, (unsigned long long)g_pkt_total,
-        (unsigned long long)g_pkt_suc, M1_cal_cnt, M2_cal_cnt, M3_cal_cnt,
-        (g_sem_total_ns / 1e9), semantic_cal_succ, grammar_cal_succ, semantic_cal_total, semantic_succ_ratio, grammar_succ_ratio,
+        unique_hangs, max_depth, eps, M2_start_region_ID, M2_region_count,region_cnt, 
+        (g_sem_total_ns / 1e9), 
+        exec_succ, semantic_cal_succ, grammar_cal_succ, semantic_cal_total, exec_succ_ratio, semantic_succ_ratio, grammar_succ_ratio,
         // nf_semantic_cal_succ, nf_grammar_cal_succ, nf_semantic_cal_total, nf_semantic_succ_ratio, nf_grammar_succ_ratio);
-        g_pkt_suc, g_pkt_gram_suc, M2_total_cnt, ratio1, ratio2);
+        g_pkt_suc, g_pkt_sem_suc, g_pkt_gram_suc, M2_total_cnt, ratio0, ratio1, ratio2);
 
 
   fflush(plot_file);
@@ -7412,7 +7417,7 @@ uint64_t __t0_sem = sem_now_ns();   /* 入口打点 */
 stage_name  = "semantic";
 stage_short = "sem";
 
-// semantic_parse_succ = g_pkt_suc;
+// semantic_parse_succ = g_pkt_sem_suc;
 // grammar_parse_succ = g_pkt_gram_suc;
 // semantic_total_sent = 0;
 // Step 3: Repeat Step 2 for a random number of times.
@@ -7445,7 +7450,7 @@ for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
   }
   // experiments: no-fixer packet valid count
   // stats_load_state();
-  // semantic_parse_succ = g_pkt_suc;
+  // semantic_parse_succ = g_pkt_sem_suc;
   // grammar_parse_succ = g_pkt_gram_suc;
   // semantic_total_sent = 0;
   // memset(output_buf, 0, sizeof(output_buf));
@@ -7492,7 +7497,7 @@ for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
   //   goto abandon_entry;
   // }
   // stats_load_state();
-  // semantic_parse_succ = g_pkt_suc - semantic_parse_succ;
+  // semantic_parse_succ = g_pkt_sem_suc - semantic_parse_succ;
   // nf_semantic_cal_succ += semantic_parse_succ;
   // grammar_parse_succ = g_pkt_gram_suc - grammar_parse_succ;
   // nf_grammar_cal_succ += grammar_parse_succ;
@@ -7522,8 +7527,9 @@ for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
   }
   
   stats_load_state();
-  semantic_parse_succ = g_pkt_suc;
+  semantic_parse_succ = g_pkt_sem_suc;
   grammar_parse_succ = g_pkt_gram_suc;
+  exec_succ = g_pkt_suc;
   if(strcmp(protocol_name, "MQTT")==0){
     semantic_total_sent = 0;
   }
@@ -7585,7 +7591,7 @@ for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
     goto abandon_entry;
   }
   stats_load_state();
-  semantic_parse_succ = g_pkt_suc - semantic_parse_succ;
+  semantic_parse_succ = g_pkt_sem_suc - semantic_parse_succ;
 
   if(strcmp(protocol_name, "MQTT")!=0){
     semantic_total_sent = g_pkt_total - semantic_total_sent;
@@ -7594,9 +7600,12 @@ for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
   semantic_cal_succ += semantic_parse_succ;
   grammar_parse_succ = g_pkt_gram_suc - grammar_parse_succ;
   grammar_cal_succ += grammar_parse_succ;
+  exec_succ = g_pkt_suc - exec_succ;
+  exec_succ_total += exec_succ;
   semantic_cal_total += semantic_total_sent;
   semantic_succ_ratio = (double)semantic_cal_succ / (double)semantic_cal_total;
   grammar_succ_ratio = (double)grammar_cal_succ / (double)semantic_cal_total;
+  exec_succ_ratio = (double)exec_succ_total / (double)semantic_cal_total;
       /* out_buf might have been mangled a bit, so let's restore it to its
        original size and shape. */
   if (queued_paths != semantic_queue) {
@@ -7613,7 +7622,7 @@ for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
 }
 // stats_load_state();
 g_sem_total_ns += (sem_now_ns() - __t0_sem);  /* 退出累加 */
-// semantic_parse_succ = g_pkt_suc - semantic_parse_succ;
+// semantic_parse_succ = g_pkt_sem_suc - semantic_parse_succ;
 // semantic_cal_succ += semantic_parse_succ;
 // grammar_parse_succ = g_pkt_gram_suc - grammar_parse_succ;
 // grammar_cal_succ += grammar_parse_succ;
@@ -8915,7 +8924,7 @@ EXP_ST void setup_dirs_fds(void) {
 
   fprintf(plot_file, "# unix_time, cycles_done, cur_path, paths_total, "
                      "pending_total, pending_favs, map_size, unique_crashes, "
-                     "unique_hangs, max_depth, execs_per_sec, M2_start_region_ID, M2_region_count, region_cnt, server_receive_cnt, parser_success, M1_cal_cnt, M2_cal_cnt, M3_cal_cnt, semantic_exec_time, semantic_cal_succ, grammar_cal_succ, semantic_cal_total, semantic_succ_ratio, grammar_succ_ratio, nf_semantic_cal_succ, nf_grammar_cal_succ, nf_semantic_cal_total, nf_semantic_succ_ratio, nf_grammar_succ_ratio\n");
+                     "unique_hangs, max_depth, execs_per_sec, M2_start_region_ID, M2_region_count, region_cnt, semantic_exec_time, SEM_M2_succ, SEM_M2_sem_succ, SEM_M2_gram_succ, SEM_M2_total, SEM_M2_succ_ratio, SEM_M2_sem_succ_ratio, SEM_M2_gram_succ_ratio, LEMUR_M2_succ, LEMUR_M2_sem_succ, LEMUR_M2_gram_succ, LEMUR_M2_total, LEMUR_M2_succ_ratio, LEMUR_M2_sem_succ_ratio, LEMUR_M2_gram_succ_ratio\n");
                      /* ignore errors */
 
 }
