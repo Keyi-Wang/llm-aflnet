@@ -7326,12 +7326,14 @@ else if(strcmp(protocol_name, "DTLS12") == 0){
 }
 else{
   // printf("Unsupported Protocol: %s\n", protocol_name);
+  free(packets);
   goto real_havoc_stage;
 }
 
 
-if (!pkt_num) {
+if (pkt_num <= 0) {
   // printf("未能解析出任何报文\n");
+  free(packets);
   goto real_havoc_stage;
 }else{
   parser_success++;
@@ -7351,10 +7353,13 @@ if (!pkt_num) {
 }
 
 void *seed_pkts = generate_packets_by_protocol(protocol_name, pkt_num);
-if (!packets) goto real_havoc_stage;
-u32 esz = pkt_elem_size(protocol_name);
+if (!seed_pkts) {
+  free(packets);
+  goto real_havoc_stage;
+}
+sizt_t esz = pkt_elem_size(protocol_name);
 // mqtt_packet_t *seed_pkts = malloc(pkt_num * sizeof(*seed_pkts));
-memcpy(seed_pkts, packets, pkt_num * esz);
+memcpy(seed_pkts, packets, (sizt_t)pkt_num * esz);
 
 // stats_load_state();
 uint64_t __t0_sem = sem_now_ns();   /* 入口打点 */ 
@@ -7371,7 +7376,7 @@ stage_max   = (doing_det ? HAVOC_CYCLES_INIT : HAVOC_CYCLES) *
 semantic_queue = queued_paths;
 
 for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
-  memcpy(packets, seed_pkts, pkt_num * esz);
+  memcpy(packets, seed_pkts, (sizt_t)pkt_num * esz);
 
   u32 rounds = rand() % 10 + 1;
   // u32 rounds = 1;
@@ -7529,6 +7534,8 @@ for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
 
   if (common_fuzz_stuff(argv, output_buf, out_len)) {
     SEM_ACCUM_ONCE();
+    free(packets);
+    free(seed_pkts);
     goto abandon_entry;
   }
   // stats_load_state();
@@ -7564,6 +7571,7 @@ g_sem_total_ns += (sem_now_ns() - __t0_sem);  /* 退出累加 */
 // grammar_succ_ratio = (double)grammar_cal_succ / (double)semantic_cal_total;
 free(packets);
 free(seed_pkts);
+
 real_havoc_stage:
   if(skip_havoc){
     goto abandon_entry;
