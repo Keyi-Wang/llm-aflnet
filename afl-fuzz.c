@@ -6171,6 +6171,15 @@ void region_calculate(int region_count, int M2_start_region_ID, int M2_region_co
   M3_cur_cnt = region_count - (M2_start_region_ID + M2_region_count);
 }
 
+static size_t pkt_elem_size(const char *p) {
+  if (!strcmp(p,"MQTT"))   return sizeof(mqtt_packet_t);
+  if (!strcmp(p,"RTSP"))   return sizeof(rtsp_packet_t);
+  if (!strcmp(p,"FTP"))    return sizeof(ftp_packet_t);
+  if (!strcmp(p,"SMTP"))   return sizeof(smtp_packet_t);
+  if (!strcmp(p,"SIP"))    return sizeof(sip_packet_t);
+  if (!strcmp(p,"DTLS12")) return sizeof(dtls_packet_t);
+  return 0;
+}
 
 /* === semantic 阶段总耗时统计 === */
 
@@ -7385,12 +7394,14 @@ else if(strcmp(protocol_name, "DTLS12") == 0){
 }
 else{
   // printf("Unsupported Protocol: %s\n", protocol_name);
+  free(packets);
   goto real_havoc_stage;
 }
 
 
-if (!pkt_num) {
+if (pkt_num <= 0) {
   // printf("未能解析出任何报文\n");
+  free(packets);
   goto real_havoc_stage;
 }else{
   parser_success++;
@@ -7409,8 +7420,14 @@ if (!pkt_num) {
 
 }
 
-mqtt_packet_t *seed_pkts = malloc(pkt_num * sizeof(*seed_pkts));
-memcpy(seed_pkts, packets, pkt_num * sizeof(*seed_pkts));
+void *seed_pkts = generate_packets_by_protocol(protocol_name, pkt_num);
+if (!seed_pkts) {
+  free(packets);
+  goto real_havoc_stage;
+}
+size_t esz = pkt_elem_size(protocol_name);
+// mqtt_packet_t *seed_pkts = malloc(pkt_num * sizeof(*seed_pkts));
+memcpy(seed_pkts, packets, (size_t)pkt_num * esz);
 // stats_load_state();
 uint64_t __t0_sem = sem_now_ns();   /* 入口打点 */ 
 // Step 2: Choose a random field in the structured messages and apply LLM-generated mutator to it. Return mutated structured messages(M2').
@@ -7426,7 +7443,7 @@ stage_max   = (doing_det ? HAVOC_CYCLES_INIT : HAVOC_CYCLES) *
 semantic_queue = queued_paths;
 
 for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
-  memcpy(packets, seed_pkts, pkt_num * sizeof(*seed_pkts));
+  memcpy(packets, seed_pkts, (size_t)pkt_num * esz);
 
   u32 rounds = rand() % 10 + 1;
   // u32 rounds = 1;
@@ -7588,6 +7605,8 @@ for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
 
   if (common_fuzz_stuff(argv, output_buf, out_len)) {
     SEM_ACCUM_ONCE();
+    free(packets);
+    free(seed_pkts);
     goto abandon_entry;
   }
   stats_load_state();
