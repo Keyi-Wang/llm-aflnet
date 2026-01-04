@@ -7357,9 +7357,9 @@ if (!seed_pkts) {
   free(packets);
   goto real_havoc_stage;
 }
-sizt_t esz = pkt_elem_size(protocol_name);
+size_t esz = pkt_elem_size(protocol_name);
 // mqtt_packet_t *seed_pkts = malloc(pkt_num * sizeof(*seed_pkts));
-memcpy(seed_pkts, packets, (sizt_t)pkt_num * esz);
+memcpy(seed_pkts, packets, (size_t)pkt_num * esz);
 
 // stats_load_state();
 uint64_t __t0_sem = sem_now_ns();   /* 入口打点 */ 
@@ -7376,7 +7376,7 @@ stage_max   = (doing_det ? HAVOC_CYCLES_INIT : HAVOC_CYCLES) *
 semantic_queue = queued_paths;
 
 for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
-  memcpy(packets, seed_pkts, (sizt_t)pkt_num * esz);
+  memcpy(packets, seed_pkts, (size_t)pkt_num * esz);
 
   u32 rounds = rand() % 10 + 1;
   // u32 rounds = 1;
