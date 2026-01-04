@@ -4611,7 +4611,15 @@ static void stats_load_state(void) {
 //         (long)time(NULL), total_msg_send, e, p1, r, p2);
 
 // }
-
+static size_t pkt_elem_size(const char *p) {
+  if (!strcmp(p,"MQTT"))   return sizeof(mqtt_packet_t);
+  if (!strcmp(p,"RTSP"))   return sizeof(rtsp_packet_t);
+  if (!strcmp(p,"FTP"))    return sizeof(ftp_packet_t);
+  if (!strcmp(p,"SMTP"))   return sizeof(smtp_packet_t);
+  if (!strcmp(p,"SIP"))    return sizeof(sip_packet_t);
+  if (!strcmp(p,"DTLS12")) return sizeof(dtls_packet_t);
+  return 0;
+}
 /* Update the plot file if there is a reason to. */
 
 static void maybe_update_plot_file(double bitmap_cvg, double eps) {
@@ -7342,8 +7350,12 @@ if (!pkt_num) {
 
 }
 
-mqtt_packet_t *seed_pkts = malloc(pkt_num * sizeof(*seed_pkts));
-memcpy(seed_pkts, packets, pkt_num * sizeof(*seed_pkts));
+void *seed_pkts = generate_packets_by_protocol(protocol_name, pkt_num);
+if (!packets) goto real_havoc_stage;
+u32 esz = pkt_elem_size(protocol_name);
+// mqtt_packet_t *seed_pkts = malloc(pkt_num * sizeof(*seed_pkts));
+memcpy(seed_pkts, packets, pkt_num * esz);
+
 // stats_load_state();
 uint64_t __t0_sem = sem_now_ns();   /* 入口打点 */ 
 // Step 2: Choose a random field in the structured messages and apply LLM-generated mutator to it. Return mutated structured messages(M2').
@@ -7359,7 +7371,7 @@ stage_max   = (doing_det ? HAVOC_CYCLES_INIT : HAVOC_CYCLES) *
 semantic_queue = queued_paths;
 
 for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
-  memcpy(packets, seed_pkts, pkt_num * sizeof(*seed_pkts));
+  memcpy(packets, seed_pkts, pkt_num * esz);
 
   u32 rounds = rand() % 10 + 1;
   // u32 rounds = 1;
