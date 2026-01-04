@@ -7373,7 +7373,7 @@ havoc_stage:
 
 parser_through++;
 packets = generate_packets_by_protocol(protocol_name, 105);
-
+if(!packets) goto real_havoc_stage;
 if(strcmp(protocol_name, "MQTT") == 0) {
   pkt_num = parse_mqtt_msg(out_buf, len, (mqtt_packet_t*)packets, 105);
 }
