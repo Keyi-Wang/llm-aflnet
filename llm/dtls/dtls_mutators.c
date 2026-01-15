@@ -9248,20 +9248,6 @@ void mutate_client_key_exchange_body(dtls_client_key_exchange_body_t *cke) {
         break;
     }
 
-    /* global randomized perturbation to avoid pattern collapse */
-    if (dtls_rnd_u8() & 1u) {
-        /* light touch across one representative buffer depending on kx */
-        switch (cke->kx_alg) {
-        case KX_RSA:
-            dtls_mix_shallow_deep(cke->u.rsa.enc_pms.enc_pms, (size_t)cke->u.rsa.enc_pms.enc_pms_len);
-            break;
-        case KX_PSK:
-            dtls_mix_shallow_deep(cke->u.psk.psk.identity, (size_t)cke->u.psk.psk.identity_len);
-            break;
-        default:
-            break;
-        }
-    }
 }
 
 
@@ -9968,16 +9954,6 @@ static void mutate_alert_level_u8(uint8_t *lvl) {
         break;
     }
 
-    /* extra randomized perturbations (shallow+deep) to avoid collapse */
-    if (dtls_rnd_u8() & 1u) {
-        /* shallow */
-        *lvl ^= (uint8_t)(1u << (dtls_rnd_u8() & 7u));
-    }
-    if (dtls_rnd_u8() & 1u) {
-        /* deep: occasionally re-snap to canonical after chaos */
-        if (dtls_rnd_u8() & 1u) *lvl = 1u;
-        else *lvl = 2u;
-    }
 }
 
 void mutate_alert_level(dtls_packet_t *pkts, size_t n) {
@@ -10848,19 +10824,24 @@ void dispatch_dtls_multiple_mutations(dtls_packet_t *pkts, int num_packets, int 
         uint32_t deep = (xorshift32() & 3u) == 0u; /* ~25% deep */
         uint32_t k_global = deep ? (2u + rnd_u32(3u)) : 1u;
         uint32_t k_local  = deep ? (2u + rnd_u32(5u)) : (1u + rnd_u32(2u));
+        int index = rand() % num_packets;
+        dtls_packet_t *p = &pkts[index];
 
         /* global-ish: record header always eligible; handshake header only if any handshake exists */
-        call_some(g_record_hdr_muts, sizeof(g_record_hdr_muts)/sizeof(g_record_hdr_muts[0]),
-                  pkts, n, 1u, k_global);
-
+        if ((xorshift32() & 9u) == 0u) {
+            call_one(g_record_hdr_muts, sizeof(g_record_hdr_muts)/sizeof(g_record_hdr_muts[0]),
+                  p, 1);
+            continue;
+        }
         /* pick a packet to guide local dispatch */
-        dtls_packet_t *p = &pkts[rnd_u32((uint32_t)n)];
+        
 
         if (p->kind == DTLS_PKT_HANDSHAKE) {
             /* mutate handshake header sometimes */
-            if ((xorshift32() & 1u) == 0u) {
-                call_some(g_handshake_hdr_muts, sizeof(g_handshake_hdr_muts)/sizeof(g_handshake_hdr_muts[0]),
-                          pkts, n, 1u, deep ? 3u : 2u);
+            if ((xorshift32() & 9u) == 0u) {
+                call_one(g_handshake_hdr_muts, sizeof(g_handshake_hdr_muts)/sizeof(g_handshake_hdr_muts[0]),
+                          p, 1);
+                continue;
             }
 
             uint8_t mt = p->payload.handshake.handshake_header.msg_type;
@@ -10868,95 +10849,95 @@ void dispatch_dtls_multiple_mutations(dtls_packet_t *pkts, int num_packets, int 
             switch (mt) {
             case 0: /* HelloRequest: header-only mutations already cover this */
                 /* occasionally also perturb record header again to mix */
-                if (deep) call_one(g_record_hdr_muts, sizeof(g_record_hdr_muts)/sizeof(g_record_hdr_muts[0]), pkts, n);
+                // if (deep) call_one(g_record_hdr_muts, sizeof(g_record_hdr_muts)/sizeof(g_record_hdr_muts[0]), pkts, n);
                 break;
 
             case 1: /* ClientHello */
-                call_some(g_client_hello_muts, sizeof(g_client_hello_muts)/sizeof(g_client_hello_muts[0]),
-                          pkts, n, 1u, k_local);
+                call_one(g_client_hello_muts, sizeof(g_client_hello_muts)/sizeof(g_client_hello_muts[0]),
+                          p, 1);
                 break;
 
             case 2: /* ServerHello */
-                call_some(g_server_hello_muts, sizeof(g_server_hello_muts)/sizeof(g_server_hello_muts[0]),
-                          pkts, n, 1u, k_local);
+                call_one(g_server_hello_muts, sizeof(g_server_hello_muts)/sizeof(g_server_hello_muts[0]),
+                          p, 1);
                 break;
 
             case 3: /* HelloVerifyRequest */
-                call_some(g_hv_muts, sizeof(g_hv_muts)/sizeof(g_hv_muts[0]),
-                          pkts, n, 1u, k_local);
+                call_one(g_hv_muts, sizeof(g_hv_muts)/sizeof(g_hv_muts[0]),
+                          p, 1);
                 break;
 
             case 11: /* Certificate */
-                call_some(g_cert_muts, sizeof(g_cert_muts)/sizeof(g_cert_muts[0]),
-                          pkts, n, 1u, k_local);
+                call_one(g_cert_muts, sizeof(g_cert_muts)/sizeof(g_cert_muts[0]),
+                          p, 1);
                 break;
 
             case 12: /* ServerKeyExchange */
-                call_some(g_ske_muts, sizeof(g_ske_muts)/sizeof(g_ske_muts[0]),
-                          pkts, n, 1u, k_local);
+                call_one(g_ske_muts, sizeof(g_ske_muts)/sizeof(g_ske_muts[0]),
+                          p, 1);
                 break;
 
             case 13: /* CertificateRequest */
-                call_some(g_cert_req_muts, sizeof(g_cert_req_muts)/sizeof(g_cert_req_muts[0]),
-                          pkts, n, 1u, k_local);
+                call_one(g_cert_req_muts, sizeof(g_cert_req_muts)/sizeof(g_cert_req_muts[0]),
+                          p, 1);
                 break;
 
             case 15: /* CertificateVerify */
-                call_some(g_cv_muts, sizeof(g_cv_muts)/sizeof(g_cv_muts[0]),
-                          pkts, n, 1u, k_local);
+                call_one(g_cv_muts, sizeof(g_cv_muts)/sizeof(g_cv_muts[0]),
+                          p, 1);
                 break;
 
             case 16: /* ClientKeyExchange */
-                call_some(g_cke_muts, sizeof(g_cke_muts)/sizeof(g_cke_muts[0]),
-                          pkts, n, 1u, k_local);
+                call_one(g_cke_muts, sizeof(g_cke_muts)/sizeof(g_cke_muts[0]),
+                          p, 1);
                 break;
 
             case 20: /* Finished */
-                call_some(g_finished_muts, sizeof(g_finished_muts)/sizeof(g_finished_muts[0]),
-                          pkts, n, 1u, k_local);
+                call_one(g_finished_muts, sizeof(g_finished_muts)/sizeof(g_finished_muts[0]),
+                          p, 1);
                 break;
 
             default:
                 /* unknown handshake: rely on header + record header mutations for diversity */
                 if (deep) {
-                    call_some(g_handshake_hdr_muts, sizeof(g_handshake_hdr_muts)/sizeof(g_handshake_hdr_muts[0]),
-                              pkts, n, 1u, 2u);
+                    call_one(g_handshake_hdr_muts, sizeof(g_handshake_hdr_muts)/sizeof(g_handshake_hdr_muts[0]),
+                              p,1);
                 }
                 break;
             }
 
         } else if (p->kind == DTLS_PKT_ALERT) {
-            call_some(g_alert_muts, sizeof(g_alert_muts)/sizeof(g_alert_muts[0]),
-                      pkts, n, 1u, k_local);
+            call_one(g_alert_muts, sizeof(g_alert_muts)/sizeof(g_alert_muts[0]),
+                      p, 1);
 
         } else if (p->kind == DTLS_PKT_APPLICATION_DATA) {
-            call_some(g_appdata_muts, sizeof(g_appdata_muts)/sizeof(g_appdata_muts[0]),
-                      pkts, n, 1u, k_local);
+            call_one(g_appdata_muts, sizeof(g_appdata_muts)/sizeof(g_appdata_muts[0]),
+                      p, 1);
 
         } else if (p->kind == DTLS_PKT_CHANGE_CIPHER_SPEC) {
             /* no (dtls_packet_t*,size_t) mutator in your list for CCS value; keep it header/record based */
             if (deep) {
-                call_some(g_record_hdr_muts, sizeof(g_record_hdr_muts)/sizeof(g_record_hdr_muts[0]),
-                          pkts, n, 1u, 2u);
+                call_one(g_record_hdr_muts, sizeof(g_record_hdr_muts)/sizeof(g_record_hdr_muts[0]),
+                          p, 1);
             }
 
         } else { /* DTLS_PKT_ENCRYPTED or unknown */
             /* treat as opaque: only record header mutations apply */
             if (deep) {
-                call_some(g_record_hdr_muts, sizeof(g_record_hdr_muts)/sizeof(g_record_hdr_muts[0]),
-                          pkts, n, 1u, 2u);
+                call_one(g_record_hdr_muts, sizeof(g_record_hdr_muts)/sizeof(g_record_hdr_muts[0]),
+                          p, 1);
             }
         }
 
-        /* extra random mix-in to avoid collapsing into one pattern */
-        if ((xorshift32() & 7u) == 0u) { /* ~12.5% */
-            /* choose one “orthogonal” area */
-            uint32_t pick = xorshift32() % 5u;
-            if (pick == 0) call_one(g_record_hdr_muts, sizeof(g_record_hdr_muts)/sizeof(g_record_hdr_muts[0]), pkts, n);
-            else if (pick == 1) call_one(g_handshake_hdr_muts, sizeof(g_handshake_hdr_muts)/sizeof(g_handshake_hdr_muts[0]), pkts, n);
-            else if (pick == 2) call_one(g_alert_muts, sizeof(g_alert_muts)/sizeof(g_alert_muts[0]), pkts, n);
-            else if (pick == 3) call_one(g_appdata_muts, sizeof(g_appdata_muts)/sizeof(g_appdata_muts[0]), pkts, n);
-            else call_one(g_client_hello_muts, sizeof(g_client_hello_muts)/sizeof(g_client_hello_muts[0]), pkts, n);
-        }
+        // /* extra random mix-in to avoid collapsing into one pattern */
+        // if ((xorshift32() & 7u) == 0u) { /* ~12.5% */
+        //     /* choose one “orthogonal” area */
+        //     uint32_t pick = xorshift32() % 5u;
+        //     if (pick == 0) call_one(g_record_hdr_muts, sizeof(g_record_hdr_muts)/sizeof(g_record_hdr_muts[0]), pkts, n);
+        //     else if (pick == 1) call_one(g_handshake_hdr_muts, sizeof(g_handshake_hdr_muts)/sizeof(g_handshake_hdr_muts[0]), pkts, n);
+        //     else if (pick == 2) call_one(g_alert_muts, sizeof(g_alert_muts)/sizeof(g_alert_muts[0]), pkts, n);
+        //     else if (pick == 3) call_one(g_appdata_muts, sizeof(g_appdata_muts)/sizeof(g_appdata_muts[0]), pkts, n);
+        //     else call_one(g_client_hello_muts, sizeof(g_client_hello_muts)/sizeof(g_client_hello_muts[0]), pkts, n);
+        // }
     }
 }

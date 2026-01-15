@@ -113,11 +113,11 @@ static int serialize_handshake_body(const dtls_packet_t *pkt, u8 *tmp, u32 tmp_c
 
     /* If parser stored raw body (unknown/unparsable), use it for byte-identical output. */
     if (pkt->payload.handshake.raw_body_len != 0) {
-        u32 l = pkt->payload.handshake.raw_body_len;
-        if (l > tmp_cap) return -1;
-        memcpy(tmp, pkt->payload.handshake.raw_body, l);
-        *body_len_out = l;
-        return 0;
+        // u32 l = pkt->payload.handshake.raw_body_len;
+        // if (l > tmp_cap) return -1;
+        // memcpy(tmp, pkt->payload.handshake.raw_body, l);
+        // *body_len_out = l;
+        return -1;
     }
 
     switch (t) {
@@ -335,11 +335,12 @@ static int serialize_handshake_body(const dtls_packet_t *pkt, u8 *tmp, u32 tmp_c
         break;
     }
     default: {
-        u32 l = pkt->payload.handshake.raw_body_len;
-        if (l > tmp_cap) return -1;
-        if (l) memcpy(tmp, pkt->payload.handshake.raw_body, l);
-        *body_len_out = l;
-        return 0;
+        // u32 l = pkt->payload.handshake.raw_body_len;
+        // if (l > tmp_cap) return -1;
+        // if (l) memcpy(tmp, pkt->payload.handshake.raw_body, l);
+        // *body_len_out = l;
+        // return 0;
+        return -1;
     }
     }
 
@@ -351,7 +352,7 @@ static int serialize_handshake_body(const dtls_packet_t *pkt, u8 *tmp, u32 tmp_c
 
 int reassemble_dtls_msgs(const dtls_packet_t *packets, u32 num_packets, u8 *output_buf, u32 *out_len)
 {
-    if (!out_len || !output_buf) return -1;
+    if (!output_buf) return -1;
 
     u32 cap = 1024 * 1024; /* conservative default */
     u32 off = 0;
