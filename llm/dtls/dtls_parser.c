@@ -36,19 +36,6 @@ static int parse_vec_u16(const u8 *body, u32 body_len, u32 *o_io, u8 *out, u16 o
     return 0;
 }
 
-/* Parse TLS/DTLS opaque vector: uint8 length + bytes[] */
-static int parse_vec_u8(const u8 *body, u32 body_len, u32 *o_io, u8 *out, u16 out_cap, u8 *out_len) {
-    u32 o = *o_io;
-    if (o + 1 > body_len) return -1;
-    u8 l = body[o++];
-    if (l > out_cap) return -1;
-    if (o + l > body_len) return -1;
-    if (l && out) memcpy(out, body + o, l);
-    o += l;
-    if (out_len) *out_len = l;
-    *o_io = o;
-    return 0;
-}
 
 /* Parse DH params: ServerDHParams = p<2..> g<2..> Ys<2..> (all uint16 vectors) */
 static int parse_server_dh_params(const u8 *body, u32 body_len, u32 *o_io, dtls_server_dh_params_t *p) {
@@ -477,6 +464,7 @@ size_t parse_dtls_msg(const u8 *buf, u32 buf_len, dtls_packet_t *out_packets, u3
     u32 count = 0;
 
     while (off + 13 <= buf_len && count < max_count) {
+        int keep_pkt = 1;
         dtls_packet_t *pkt = &out_packets[count];
         set_zero(pkt, sizeof(*pkt));
 
@@ -537,9 +525,7 @@ size_t parse_dtls_msg(const u8 *buf, u32 buf_len, dtls_packet_t *out_packets, u3
             }
 
             if (ok != 0) {
-                if (h_body_len > DTLS_MAX_HANDSHAKE_RAW) break;
-                pkt->payload.handshake.raw_body_len = (u16)h_body_len;
-                memcpy(pkt->payload.handshake.raw_body, body, h_body_len);
+                keep_pkt = 0;
             } else {
                 pkt->payload.handshake.raw_body_len = 0;
             }
@@ -569,7 +555,10 @@ size_t parse_dtls_msg(const u8 *buf, u32 buf_len, dtls_packet_t *out_packets, u3
         }
 
         off += plen;
-        count++;
+        if (keep_pkt) {
+            count++;
+        }
+
     }
 
     return (size_t)count;

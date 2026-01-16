@@ -1,7 +1,7 @@
 #include "rtsp.h"
 #include <string.h>
 #include <stdio.h>
-#include "rtsp.h"  // 假设你定义的所有 struct 都在这里
+#include "rtsp.h"  
 
 #define APPEND_FMT(buf, offset, fmt, ...)                                         \
     do {                                                                          \
@@ -17,7 +17,7 @@
             fprintf(stderr, "[!] APPEND_FMT overflow: offset=%u\n", offset);     \
         }                                                                         \
     } while (0)
- #define MAX_RTSP_MSG_LEN 1024 * 1024  // 最大 RTSP 消息长度
+ #define MAX_RTSP_MSG_LEN 1024 * 1024  
 
 typedef uint8_t u8;
 typedef uint32_t u32;
@@ -1925,7 +1925,7 @@ int serialize_record(const rtsp_record_packet_t *p, u8 *output_buf, u32 *out_len
                    p->scale_header.crlf);
     }
 
-    // === 5. Entity Header（仅 Accept-Language）===
+    // === 5. Entity Header===
     if (p->accept_language_header.name[0] && p->accept_language_header.entry_count > 0) {
         APPEND_FMT(output_buf, offset, "%s%s", p->accept_language_header.name, p->accept_language_header.colon_space);
         for (int i = 0; i < p->accept_language_header.entry_count; ++i) {
@@ -1976,7 +1976,7 @@ int reassemble_a_rtsp_msg(const rtsp_packet_t *pkt, u8 *output_buf, u32 *out_len
         case RTSP_TYPE_REDIRECT:
             return serialize_redirect(&pkt->redirect, output_buf, out_len);
         default:
-            return -1; // 未知 method
+            return -1; 
     }
 }
 
@@ -1985,16 +1985,14 @@ int reassemble_rtsp_msgs(const rtsp_packet_t *packets, u32 num_packets, u8 *outp
     *out_len = 0;
 
     for (u32 j = 0; j < num_packets; ++j) {
-        u8 temp_buf[1024 * 1024]; // 临时缓冲区
+        u8 temp_buf[1024 * 1024]; 
         u32 temp_len = 0;
 
         if (reassemble_a_rtsp_msg(&packets[j], temp_buf, &temp_len) != 0) {
-            // printf("❌ 第 %zu 条消息重组失败，跳过\n", j);
             continue;
         }
 
         if (offset + temp_len >= MAX_FILE) {
-            // printf("⚠️ 消息序列长度超过限制，截断\n");
             break;
         }
 

@@ -26,7 +26,7 @@
 #define MQTT_PUBREC   5
 #endif
 #ifndef MQTT_PUBREL
-#define MQTT_PUBREL   6   /* 注意：固定头低 4 位必须为 0x2 -> 0x62 */
+#define MQTT_PUBREL   6  
 #endif
 #ifndef MQTT_PUBCOMP
 #define MQTT_PUBCOMP  7
@@ -49,7 +49,7 @@ typedef struct {
     uint8_t connect_flags;
     uint16_t keep_alive;
     uint32_t property_len;
-    uint8_t properties[MAX_PROPERTIES_LEN];  // 原始属性字节流
+    uint8_t properties[MAX_PROPERTIES_LEN];  
 } mqtt_connect_variable_header_t;
 
 typedef struct {
@@ -73,7 +73,7 @@ typedef struct {
 typedef struct {
     uint16_t packet_identifier;
     uint32_t property_len;
-    uint8_t properties[MAX_PROPERTIES_LEN];  // 原始属性字节流
+    uint8_t properties[MAX_PROPERTIES_LEN];  
 } mqtt_subscribe_variable_header_t;
 
 typedef struct {
@@ -92,7 +92,7 @@ typedef struct {
 
 typedef struct {
     char topic_name[MAX_TOPIC_LEN];
-    uint16_t packet_identifier; // 如果 QoS > 0 才使用
+    uint16_t packet_identifier;
     uint32_t property_len;
     uint8_t properties[MAX_PROPERTIES_LEN];
 } mqtt_publish_variable_header_t;
@@ -106,42 +106,42 @@ typedef struct {
     mqtt_fixed_header_t fixed_header;
     mqtt_publish_variable_header_t variable_header;
     mqtt_publish_payload_t payload;
-    uint8_t qos;   // 从 fixed header flags 解析
+    uint8_t qos;  
     uint8_t dup;
     uint8_t retain;
 } mqtt_publish_packet_t;
 
 typedef struct {
-    uint16_t packet_identifier;   // 报文标识符
-    uint32_t property_len;        // 属性字段长度
-    uint8_t properties[MAX_PROPERTIES_LEN];  // 属性字节流
+    uint16_t packet_identifier; 
+    uint32_t property_len;     
+    uint8_t properties[MAX_PROPERTIES_LEN];  
 } mqtt_unsubscribe_variable_header_t;
 
 typedef struct {
-    char topic_filters[MAX_TOPIC_FILTERS][MAX_TOPIC_LEN];  // 退订的主题过滤器列表
-    uint8_t topic_count;                                   // 主题数量
+    char topic_filters[MAX_TOPIC_FILTERS][MAX_TOPIC_LEN];  
+    uint8_t topic_count;                                   
 } mqtt_unsubscribe_payload_t;
 
 typedef struct {
-    mqtt_fixed_header_t fixed_header;                      // 固定头部
-    mqtt_unsubscribe_variable_header_t variable_header;    // 可变头部
-    mqtt_unsubscribe_payload_t payload;                    // 有效载荷
+    mqtt_fixed_header_t fixed_header;                      
+    mqtt_unsubscribe_variable_header_t variable_header;    
+    mqtt_unsubscribe_payload_t payload;                    
 } mqtt_unsubscribe_packet_t;
 
 typedef struct {
-    uint8_t reason_code;                // 原因码（Reason Code）
-    uint32_t property_len;              // 属性长度
-    uint8_t properties[MAX_PROPERTIES_LEN];  // 属性字节流
+    uint8_t reason_code;                
+    uint32_t property_len;              
+    uint8_t properties[MAX_PROPERTIES_LEN];  
 } mqtt_auth_variable_header_t;
 
 typedef struct {
-    mqtt_fixed_header_t fixed_header;                   // 固定头部
-    mqtt_auth_variable_header_t variable_header;        // 可变头部
+    mqtt_fixed_header_t fixed_header;                   
+    mqtt_auth_variable_header_t variable_header;        
 } mqtt_auth_packet_t;
 
 typedef struct {
     uint16_t packet_identifier;
-    uint8_t  reason_code;     /* 若缺省未出现，解析时应置 0x00 (Success) */
+    uint8_t  reason_code;     
     uint32_t property_len;
     uint8_t  properties[MAX_PROPERTIES_LEN];
 } mqtt_pubresp_variable_header_t;
@@ -174,8 +174,8 @@ typedef struct {
 typedef struct {
     mqtt_fixed_header_t fixed_header;
     struct {
-        uint8_t  reason_code;     /* 缺省 0x00 */
-        uint32_t property_len;    /* 缺省 0 */
+        uint8_t  reason_code;    
+        uint32_t property_len;   
         uint8_t  properties[MAX_PROPERTIES_LEN];
     } variable_header;
 } mqtt_disconnect_packet_t;

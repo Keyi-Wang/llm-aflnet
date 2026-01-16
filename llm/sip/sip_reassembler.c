@@ -8,7 +8,7 @@
 #define APPEND_CHECK do { if (pos >= cap) return -1; } while(0)
 #endif
 
-/* --------- 小工具：统一的 append --------- */
+
 static int out_append(char *dst, size_t cap, size_t *ppos, const char *s) {
   size_t pos = *ppos;
   size_t n = strlen(s);
@@ -36,7 +36,6 @@ static int out_append_hdr_text(const char *name, const char *val, char *dst, siz
   return 0;
 }
 
-/* --------- 前置声明：有的 emit_* 相互调用顺序 ---------- */
 static int emit_authorization(const sip_authorization_hdr_t *h, char *dst, size_t cap, size_t *pos);
 static int emit_proxy_auth(const sip_proxy_authorization_hdr_t *h, char *dst, size_t cap, size_t *pos);
 static int emit_content_encoding(const sip_content_encoding_hdr_t *h, char *dst, size_t cap, size_t *pos);
@@ -44,7 +43,6 @@ static int emit_content_length(const sip_content_length_hdr_t *h, char *dst, siz
 static int emit_encryption(const sip_encryption_hdr_t *h, char *dst, size_t cap, size_t *pos);
 static int emit_resp_key(const sip_response_key_hdr_t *h, char *dst, size_t cap, size_t *pos);
 
-/* --------- 头部输出（仅当 name[0] != '\0'） --------- */
 
 static int emit_accept(const sip_accept_hdr_t *h, char *dst, size_t cap, size_t *pos) {
   if (!h->name[0]) return 0;
@@ -188,7 +186,6 @@ static int emit_timestamp(const sip_timestamp_hdr_t *h, char *dst, size_t cap, s
   return 0;
 }
 
-/* 为避免重复，给 Authorization / Proxy-Authorization / Content-* / Encryption 也写薄封装 */
 static int emit_authorization(const sip_authorization_hdr_t *h, char *dst, size_t cap, size_t *pos) {
   if (!h || !h->name[0]) return 0;
   if (out_append(dst, cap, pos, h->name)) return -1;
@@ -242,20 +239,15 @@ static int emit_resp_key(const sip_response_key_hdr_t *h, char *dst, size_t cap,
   return 0;
 }
 
-/* --------- Content-Length 同步辅助 --------- */
 static void ensure_cl_synced(sip_content_length_hdr_t *cl, size_t body_len) {
 
-  /* 长度统一与 body 一致（即便 body 为 0 也同步） */
   snprintf(cl->length, sizeof cl->length, "%zu", body_len);
 }
 
-/* ------------------- 各消息发射（含 body 处理） ------------------- */
-
 static int emit_invite(const sip_invite_packet_t *p, char *out, size_t cap, size_t *pos) {
-  /* 先同步 CL（若 body 存在或 header 本身存在） */
+
   size_t body_len = p->body[0] ? strlen(p->body) : 0;
   if (p->content_length.name[0] != '\0' || body_len > 0) {
-    /* cast 掉 const 仅用于输出期间修正缓存值；若不希望改原对象，可在栈上拷贝一份 header。 */
     sip_content_length_hdr_t cl = p->content_length;
     ensure_cl_synced(&cl, body_len);
 
@@ -280,7 +272,7 @@ static int emit_invite(const sip_invite_packet_t *p, char *out, size_t cap, size
     if (emit_contact(&p->contact, out, cap, pos)) return -1;
 
     if (emit_content_encoding(&p->content_encoding, out, cap, pos)) return -1;
-    if (emit_content_length(&cl, out, cap, pos)) return -1; /* 用同步后的 CL */
+    if (emit_content_length(&cl, out, cap, pos)) return -1;
     if (emit_content_type(&p->content_type, out, cap, pos)) return -1;
 
     if (out_append_hdr_text(p->date.name, p->date.rfc1123, out, cap, pos)) return -1;
@@ -307,7 +299,6 @@ static int emit_invite(const sip_invite_packet_t *p, char *out, size_t cap, size
     return 0;
   }
 
-  /* 无需同步的常规路径（无 CL 且无 body） */
   if (out_append(out, cap, pos, p->method)) return -1;
   if (out_append(out, cap, pos, p->space1)) return -1;
   if (out_append(out, cap, pos, p->request_uri)) return -1;
@@ -374,7 +365,7 @@ static int emit_ack(const sip_ack_packet_t *p, char *out, size_t cap, size_t *po
 
   if (emit_authorization(&p->authorization, out, cap, pos)) return -1;
   if (emit_contact(&p->contact, out, cap, pos)) return -1;
-  /* 用同步后的 CL（如需） */
+
   if (cl.name[0]) { if (emit_content_length(&cl, out, cap, pos)) return -1; }
   else            { if (emit_content_length(&p->content_length, out, cap, pos)) return -1; }
   if (emit_content_type(&p->content_type, out, cap, pos)) return -1;
@@ -575,7 +566,6 @@ static int emit_options(const sip_options_packet_t *p, char *out, size_t cap, si
   return 0;
 }
 
-/* ------------------------------ 对外入口 ------------------------------ */
 
 int reassemble_sip_msgs(const sip_packet_t *packets, u32 num_packets, u8 *output_buf, u32 *out_len) {
   if (!packets || !output_buf || !out_len) return -1;

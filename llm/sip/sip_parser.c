@@ -14,12 +14,10 @@
 #define SIP_BODY_MAX 8192
 #endif
 
-/* ------------------------------ 工具函数 ------------------------------ */
 
 static inline void memzero(void *p, size_t n) { memset(p, 0, n); }
 
 static size_t cpy_trim(char *dst, size_t dst_sz, const char *src, size_t len) {
-  // 去首尾空白并 NUL 终止
   while (len && (src[0] == ' ' || src[0] == '\t')) { src++; len--; }
   while (len && (src[len-1] == ' ' || src[len-1] == '\t' || src[len-1] == '\r' || src[len-1] == '\n')) len--;
   size_t n = MIN(len, dst_sz ? dst_sz - 1 : 0);
@@ -31,7 +29,6 @@ static size_t cpy_trim(char *dst, size_t dst_sz, const char *src, size_t len) {
 }
 
 
-// 把 name 与 ": " 与 "\r\n" 写好
 static void hdr_set_present(char name_buf[], size_t name_len,
                             char sep_buf[],  size_t sep_len,
                             char crlf_buf[], size_t crlf_len,
@@ -44,10 +41,9 @@ static void hdr_set_present(char name_buf[], size_t name_len,
   snprintf(crlf_buf, crlf_len, "\r\n");
 }
 
-/* 从 Content-Length 头部的文本里解析数值（不存在/非法则返回 -1） */
 static long parse_cl_value_from_hdr(const sip_content_length_hdr_t *h) {
   if (!h) return -1;
-  if (h->name[0] == '\0') return -1;                 /* header 标记为缺省 */
+  if (h->name[0] == '\0') return -1;                 
   const char *s = h->length;
   while (*s && (*s==' ' || *s=='\t')) s++;
   long v = 0;
@@ -61,7 +57,7 @@ static long parse_cl_value_from_hdr(const sip_content_length_hdr_t *h) {
   return any ? v : -1;
 }
 
-/* 读取当前报文对象的 Content-Length 值；不支持的类型返回 -1 */
+
 static long get_pkt_content_length(const sip_packet_t *pkt) {
   if (!pkt) return -1;
   switch (pkt->cmd_type) {
@@ -71,11 +67,10 @@ static long get_pkt_content_length(const sip_packet_t *pkt) {
     case SIP_PKT_OPTIONS:  return parse_cl_value_from_hdr(&pkt->pkt.options.content_length);
     case SIP_PKT_BYE:      return parse_cl_value_from_hdr(&pkt->pkt.bye.content_length);
     case SIP_PKT_CANCEL:   return parse_cl_value_from_hdr(&pkt->pkt.cancel.content_length);
-    default:               return -1; /* BYE/CANCEL 未定义 Content-Length 解析 */
+    default:               return -1;
   }
 }
 
-/* 返回可写入 body 的指针和容量（仅在四种允许带 body 的方法上有效） */
 static char *get_pkt_body_buf_and_cap(sip_packet_t *pkt, size_t *out_cap) {
   if (!pkt) { if (out_cap) *out_cap = 0; return NULL; }
   switch (pkt->cmd_type) {
@@ -97,11 +92,9 @@ static char *get_pkt_body_buf_and_cap(sip_packet_t *pkt, size_t *out_cap) {
   }
 }
 
-
-// 把 header 设为“缺省”（name[0] = '\0'）
 #define HDR_MARK_ABSENT(hdr) do { (hdr).name[0] = '\0'; } while(0)
 
-/* ------------------------------ 单个头解析 ------------------------------ */
+
 
 static void parse_accept(const char *v, size_t n, sip_accept_hdr_t *h) {
   hdr_set_present(h->name, sizeof h->name, h->colon_space, sizeof h->colon_space, h->crlf, sizeof h->crlf, "Accept");
@@ -165,13 +158,13 @@ static void parse_addr_hdr_common(const char *name, const char *v, size_t n,
   hdr_set_present(name_buf, name_sz, sep_buf, sep_sz, crlf_buf, crlf_sz, name);
   *sp_opt = '\0'; *lt = '\0'; *gt = '\0'; params[0] = '\0'; display[0] = '\0'; uri[0] = '\0';
 
-  // 形如： ["Display" ] <URI> [;params]
+
   const char *p = v, *end = v + n;
   const char *ltp = memchr(p, '<', end - p);
   const char *gtp = ltp ? memchr(ltp, '>', end - ltp) : NULL;
 
   if (ltp && gtp && ltp < gtp) {
-    // display 部分
+
     size_t dlen = (size_t)(ltp - p);
     dlen = cpy_trim(display, display_sz, p, dlen);
     if (dlen) *sp_opt = ' ';
@@ -182,7 +175,7 @@ static void parse_addr_hdr_common(const char *name, const char *v, size_t n,
       cpy_trim(params, params_sz, gtp + 1, (size_t)(end - (gtp + 1)));
     }
   } else {
-    // 无尖括号，尽量当作纯 URI
+
     cpy_trim(uri, uri_sz, v, n);
   }
 }
@@ -213,7 +206,7 @@ static void parse_to(const char *v, size_t n, sip_to_hdr_t *h) {
 
 static void parse_cseq(const char *v, size_t n, sip_cseq_hdr_t *h) {
   hdr_set_present(h->name, sizeof h->name, h->colon_space, sizeof h->colon_space, h->crlf, sizeof h->crlf, "CSeq");
-  // number SP method
+
   const char *sp = memchr(v, ' ', n);
   if (sp) {
     cpy_trim(h->number, sizeof h->number, v, sp - v);
@@ -239,7 +232,6 @@ static void parse_record_route_or_route(const char *name, const char *v, size_t 
     *gt = '>';
     if (gtp + 1 < v + n) cpy_trim(params, params_sz, gtp+1, (v+n)-(gtp+1));
   } else {
-    // 尽量把整行当作 URI
     cpy_trim(uri, uri_sz, v, n);
   }
 }
@@ -362,7 +354,6 @@ static void parse_timestamp(const char *v, size_t n, sip_timestamp_hdr_t *h) {
   }
 }
 
-/* ------------------------------ 解析单条报文 ------------------------------ */
 
 static void init_all_headers_absent(sip_packet_t *pkt) {
   switch (pkt->cmd_type) {
@@ -396,7 +387,7 @@ static void init_all_headers_absent(sip_packet_t *pkt) {
       HDR_MARK_ABSENT(p->timestamp);
       HDR_MARK_ABSENT(p->user_agent);
       snprintf(p->end_crlf, sizeof p->end_crlf, "\r\n");
-      p->body[0] = '\0';              /* <== 新增 */
+      p->body[0] = '\0';            
     } break;
     case SIP_PKT_ACK: {
       sip_ack_packet_t *p = &pkt->pkt.ack;
@@ -420,7 +411,7 @@ static void init_all_headers_absent(sip_packet_t *pkt) {
       HDR_MARK_ABSENT(p->timestamp);
       HDR_MARK_ABSENT(p->user_agent);
       snprintf(p->end_crlf, sizeof p->end_crlf, "\r\n");
-      p->body[0] = '\0';              /* <== 新增 */
+      p->body[0] = '\0';          
     } break;
     case SIP_PKT_BYE: {
       sip_bye_packet_t *p = &pkt->pkt.bye;
@@ -490,9 +481,9 @@ static void init_all_headers_absent(sip_packet_t *pkt) {
       HDR_MARK_ABSENT(p->timestamp);
       HDR_MARK_ABSENT(p->user_agent);
       HDR_MARK_ABSENT(p->retry_after);
-      // retry_after 是 optional，占位缺省即可（未显式 name 字段；忽略）
+
       snprintf(p->end_crlf, sizeof p->end_crlf, "\r\n");
-      p->body[0] = '\0';              /* <== 新增 */
+      p->body[0] = '\0';           
     } break;
     case SIP_PKT_OPTIONS: {
       sip_options_packet_t *p = &pkt->pkt.options;
@@ -518,7 +509,7 @@ static void init_all_headers_absent(sip_packet_t *pkt) {
       HDR_MARK_ABSENT(p->timestamp);
       HDR_MARK_ABSENT(p->user_agent);
       snprintf(p->end_crlf, sizeof p->end_crlf, "\r\n");
-      p->body[0] = '\0';              /* <== 新增 */
+      p->body[0] = '\0';          
     } break;
     default: break;
   }
@@ -526,16 +517,15 @@ static void init_all_headers_absent(sip_packet_t *pkt) {
 
 
 static const char *find_headers_end(const char *p, const char *end) {
-  // 找到空行（\r\n\r\n 或 \n\n）
+
   const char *s = p;
   while (s < end) {
     const char *line_end = memchr(s, '\n', (size_t)(end - s));
     if (!line_end) break;
     size_t linelen = (size_t)(line_end - s + 1);
-    // 只含 CRLF 或 LF？
+
     if (linelen == 2 && s[0] == '\r' && s[1] == '\n') {
-      // 看下一行是否也是立刻开始 body
-      return line_end + 1; // 指向空行后第一个字节（即 body 开始）
+      return line_end + 1; 
     }
     if (linelen == 1 && s[0] == '\n') {
       return line_end + 1;
@@ -580,17 +570,13 @@ static void parse_request_line(const char *line, size_t n,
 }
 
 static void parse_one_header_line(const char *line, size_t n, sip_packet_t *pkt) {
-  // 找冒号
   const char *colon = memchr(line, ':', n);
   if (!colon) return;
-  // 头名
   char hname[64]; cpy_trim(hname, sizeof hname, line, colon - line);
-  // 值（跳过 ":" 后的空格）
   const char *val = colon + 1;
   size_t vlen = (size_t)((line + n) - val);
   while (vlen && (*val == ' ' || *val == '\t')) { val++; vlen--; }
 
-  // 按包类型填
   switch (pkt->cmd_type) {
     case SIP_PKT_INVITE: {
       sip_invite_packet_t *p = &pkt->pkt.invite;
@@ -761,13 +747,10 @@ static void parse_one_header_line(const char *line, size_t n, sip_packet_t *pkt)
 static size_t parse_single_message(const u8 *msg, size_t msg_len, sip_packet_t *out_pkt) {
   const char *p = (const char*)msg, *end = (const char*)msg + msg_len;
 
-  // 第一行：Request-Line
   const char *lf = memchr(p, '\n', (size_t)(end - p));
   if (!lf) return 0;
   size_t rl_len = (size_t)(lf - p);
   if (rl_len && p[rl_len-1] == '\r') rl_len--;
-
-  // 取 METHOD
   char method[SIP_TOKEN_LEN]; memzero(method, sizeof method);
   char dummy_sp1[2], dummy_sp2[2];
   char uri[SIP_URI_LEN], ver[SIP_TOKEN_LEN], crlf[SIP_CRLF_LEN];
@@ -777,7 +760,6 @@ static size_t parse_single_message(const u8 *msg, size_t msg_len, sip_packet_t *
   sip_cmd_type_t t = method_to_type(method);
   out_pkt->cmd_type = t;
 
-  // 填 request-line 字段
   switch (t) {
     case SIP_PKT_INVITE: {
       sip_invite_packet_t *q = &out_pkt->pkt.invite;
@@ -846,12 +828,10 @@ static size_t parse_single_message(const u8 *msg, size_t msg_len, sip_packet_t *
       init_all_headers_absent(out_pkt);
     } break;
     default: {
-      // Unknown：也按 INVITE 构造，至少不崩
       out_pkt->cmd_type = SIP_PKT_UNKNOWN;
     } break;
   }
 
-  // 进入头部
   const char *s = lf + 1;
   const char *hdr_end = find_headers_end(s, end);
   const char *line = s;
@@ -861,7 +841,7 @@ static size_t parse_single_message(const u8 *msg, size_t msg_len, sip_packet_t *
     if (!nl) nl = hdr_end;
     size_t linelen = (size_t)(nl - line);
     if (linelen && line[linelen-1] == '\r') linelen--;
-    if (linelen == 0) break; // 空行
+    if (linelen == 0) break; 
     parse_one_header_line(line, linelen, out_pkt);
     line = nl + 1;
   }
@@ -889,7 +869,7 @@ static size_t parse_single_message(const u8 *msg, size_t msg_len, sip_packet_t *
   return consumed_headers + (size_t)cl;
 }
 
-/* ------------------------------ 对外入口 ------------------------------ */
+
 
 size_t parse_sip_msg(const uint8_t *buf, size_t buf_len, sip_packet_t *out_packets, size_t max_count) {
   if (!buf || !out_packets || !max_count) return 0;
@@ -897,13 +877,13 @@ size_t parse_sip_msg(const uint8_t *buf, size_t buf_len, sip_packet_t *out_packe
   size_t off = 0;
 
   while (off < buf_len && count < max_count) {
-    // 跳过前导空白/空行
+
     while (off < buf_len && (buf[off] == '\r' || buf[off] == '\n' || buf[off] == ' ' || buf[off] == '\t'))
       off++;
     if (off >= buf_len) break;
 
     size_t consumed = parse_single_message(buf + off, buf_len - off, &out_packets[count]);
-    if (consumed == 0) break; // 非法或剩余不足
+    if (consumed == 0) break; 
     count++;
     off += consumed;
 

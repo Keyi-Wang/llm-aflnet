@@ -7,7 +7,6 @@
 #include <stdio.h>
 
 
-/* 输出缓冲安全追加 */
 static int out_put(u8 *out, u32 cap, u32 *pos, const char *s) {
     if (!s) return 1;
     size_t n = strlen(s);
@@ -33,7 +32,6 @@ static int out_put_if_nonempty(u8 *out, u32 cap, u32 *pos,
     return out_put(out, cap, pos, field);
 }
 
-/* ---------------- 重组单行 ---------------- */
 
 static int reassemble_one(const smtp_packet_t *p, u8 *out, u32 cap, u32 *pos) {
     switch (p->cmd_type) {
@@ -149,7 +147,6 @@ static int reassemble_one(const smtp_packet_t *p, u8 *out, u32 cap, u32 *pos) {
     }
 }
 
-/* ---------------- 对外重组接口 ---------------- */
 
 int reassemble_smtp_msgs(const smtp_packet_t *packets, u32 num_packets,
                          u8 *output_buf, u32 *out_len)
@@ -160,8 +157,8 @@ int reassemble_smtp_msgs(const smtp_packet_t *packets, u32 num_packets,
 
     for (u32 i = 0; i < num_packets; ++i) {
         if (!reassemble_one(&packets[i], output_buf, cap, &pos)) {
-            *out_len = pos; /* 返回目前已写入长度，便于诊断 */
-            return -2;      /* 缓冲不足或数据异常 */
+            *out_len = pos; 
+            return -2;     
         }
     }
 

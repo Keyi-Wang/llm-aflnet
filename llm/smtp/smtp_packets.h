@@ -107,7 +107,7 @@ typedef struct {
     char crlf[SMTP_SZ_CRLF];
 } smtp_auth_packet_t;
 
-/* 若还没有这些常量，请加上（或自行选择更合适的值） */
+
 #ifndef SMTP_SZ_NUM
 #define SMTP_SZ_NUM  16
 #endif
@@ -134,7 +134,7 @@ typedef struct {
 
 typedef struct {
     const char *data;
-    int       len;   // 原样字节数（可包含多行的 CRLF）
+    int       len;  
 } smtp_data_block_t;
 
 typedef enum{

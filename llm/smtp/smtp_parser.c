@@ -8,8 +8,6 @@
 #include <stdio.h>
 
 
-/* ---------------- 小工具：安全字符串写入 / 拷贝 ---------------- */
-
 static void set_cstr(char dst[], size_t cap, const char *s) {
     if (!dst || cap == 0) return;
     if (!s) s = "";
@@ -24,7 +22,6 @@ static void set_space_opt(char dst[SMTP_SZ_SPACE], int present) {
     set_cstr(dst, SMTP_SZ_SPACE, present ? " " : "");
 }
 
-/* 拷贝 [b,e) （不含 e），并裁剪首尾空白（空格/Tab） */
 static void set_span_trim(char dst[], size_t cap, const char *b, const char *e) {
     if (!dst || cap == 0) return;
     if (!b || !e || e < b) { dst[0] = '\0'; return; }
@@ -37,7 +34,6 @@ static void set_span_trim(char dst[], size_t cap, const char *b, const char *e) 
 }
 
 
-/* line 是否全空白（空格/Tab/CR） */
 static int line_is_blank(const char *b, const char *e) {
     while (b < e) {
         unsigned char c = (unsigned char)*b++;
@@ -46,7 +42,6 @@ static int line_is_blank(const char *b, const char *e) {
     return 1;
 }
 
-/* ---------------- 命令匹配 / token 化 ---------------- */
 
 static int cmd_ieq(const char *s, size_t n, const char *NAME) {
     for (size_t i = 0; i < n; ++i) {
@@ -99,12 +94,11 @@ static int parse_u32_dec(const char *b, const char *e, uint32_t *out) {
         if (v > 0xFFFFFFFFu) return 0;
         ++p;
     }
-    if (p == b) return 0; // 没有任何数字
+    if (p == b) return 0;
     *out = (uint32_t)v;
     return 1;
 }
 
-/* 取下一个以空白分隔的 token，返回 token 后第一个非空白位置 */
 static const char* next_token(const char *b, const char *e,
                               const char **tb, const char **te) {
     const char *p = b;
@@ -116,7 +110,6 @@ static const char* next_token(const char *b, const char *e,
     return p;
 }
 
-/* ---------------- 解析主逻辑 ---------------- */
 
 size_t parse_smtp_msg(const uint8_t *buf, size_t buf_len,
                       smtp_packet_t *out_packets, size_t max_count)
@@ -137,7 +130,6 @@ size_t parse_smtp_msg(const uint8_t *buf, size_t buf_len,
             while (1) {
                 const char *nl = memchr(scan, '\n', (size_t)(end - scan));
                 if (!nl) {
-                    /* 没找到换行，数据不完整：把剩余全部作为一个 DATA_BLOCK，然后结束解析 */
                     if (out_n < max_count) {
                         smtp_packet_t *bp = &out_packets[out_n++];
                         memset(bp, 0, sizeof(*bp));
@@ -149,27 +141,22 @@ size_t parse_smtp_msg(const uint8_t *buf, size_t buf_len,
                     break;
                 }
 
-                const char *lb = scan;               // 本行起始
-                const char *le = nl;                 // '\n' 之前
-                if (le > lb && le[-1] == '\r') --le; // 去掉行尾 CR
-
-                /* 判断是否是单独一行 '.' */
+                const char *lb = scan;               
+                const char *le = nl;                 
+                if (le > lb && le[-1] == '\r') --le; 
                 if ((le - lb) == 1 && lb[0] == '.') {
                     dot_line_beg = lb;
-                    dot_line_end = nl + 1; // 包含本行的 '\n'
+                    dot_line_end = nl + 1; 
                     break;
                 }
 
-                /* 继续下一行 */
                 scan = nl + 1;
             }
 
-            if (!in_data_mode) break; /* 已在上面把 cur=end 了 */
+            if (!in_data_mode) break;
 
             if (dot_line_beg) {
-                /* 生成一个 DATA_BLOCK：从 cur 到 dot 行之前的所有字节
-                   注意：上一行的 CRLF 应当属于正文，因此包含到 dot 行之前的 bytes。
-                   即数据块范围：[cur, dot_line_beg 的前一行 '\n' 已经包含在内] */
+
                 if (out_n < max_count) {
                     smtp_packet_t *bp = &out_packets[out_n++];
                     memset(bp, 0, sizeof(*bp));
@@ -178,7 +165,6 @@ size_t parse_smtp_msg(const uint8_t *buf, size_t buf_len,
                     bp->pkt.data_block.len  = (uint32_t)(dot_line_beg - cur);
                 }
 
-                /* 再输出一个 DOT 包 */
                 if (out_n < max_count) {
                     smtp_packet_t *dp = &out_packets[out_n++];
                     memset(dp, 0, sizeof(*dp));
@@ -188,17 +174,15 @@ size_t parse_smtp_msg(const uint8_t *buf, size_t buf_len,
                     set_crlf(dp->pkt.dot.crlf);
                 }
 
-                /* 跳过 '.' 这一行，退出 DATA 模式 */
                 cur = dot_line_end;
                 in_data_mode = 0;
-                continue; /* 回到主循环 */
+                continue; 
             } else {
-                /* 前面已处理不完整场景：此处只为完整性 */
+            
                 break;
             }
         }
 
-        /* 找到一行（以 '\n' 结尾）；去掉行尾 '\r' */
         const char *nl = memchr(cur, '\n', (size_t)(end - cur));
         if (!nl) break;
         const char *lb = cur;
@@ -218,11 +202,11 @@ size_t parse_smtp_msg(const uint8_t *buf, size_t buf_len,
             cur = nl + 1;
             continue;
         }
-        /* 提取命令 token */
+
         const char *cb, *ce;
         const char *rest = parse_cmd_token(lb, le, &cb, &ce);
         int ct = map_cmd(cb, ce);
-        if (ct < 0) { /* 未识别命令：跳过此行 */
+        if (ct < 0) {
             cur = nl + 1;
             continue;
         }
@@ -231,7 +215,6 @@ size_t parse_smtp_msg(const uint8_t *buf, size_t buf_len,
         memset(pkt, 0, sizeof(*pkt));
         pkt->cmd_type = (smtp_cmd_type_t)ct;
 
-        /* 参数区间（整体去首尾空白） */
         const char *ab = rest, *ae = le;
         while (ab < ae && (*ab == ' ' || *ab == '\t')) ++ab;
         while (ae > ab && (ae[-1] == ' ' || ae[-1] == '\t')) --ae;
@@ -257,15 +240,12 @@ size_t parse_smtp_msg(const uint8_t *buf, size_t buf_len,
             } break;
 
             case SMTP_PKT_MAIL: {
-                /* 语法：MAIL SP FROM: reverse-path [ SP esmtp-params ] */
                 set_cstr(pkt->pkt.mail.command, SMTP_SZ_CMD, "MAIL");
-                // set_space_opt(pkt->pkt.mail.space1, has_arg ? 1 : 0);
-                // set_cstr(pkt->pkt.mail.from_keyword, SMTP_SZ_CMD, "FROM:");
+
 
                 const char *t1b=NULL, *t1e=NULL;
                 const char *p = next_token(ab, ae, &t1b, &t1e);
                 if (t1b && t1b < t1e && cmd_ieq(t1b,(size_t)(t1e-t1b),"FROM:")) {
-                    /* 读取 reverse-path */
                     set_cstr(pkt->pkt.mail.from_keyword, SMTP_SZ_CMD, "FROM:");
                     set_space_opt(pkt->pkt.mail.space1, has_arg ? 1 : 0);
                     const char *rp_b=NULL, *rp_e=NULL;
@@ -276,14 +256,12 @@ size_t parse_smtp_msg(const uint8_t *buf, size_t buf_len,
                         set_cstr(pkt->pkt.mail.reverse_path, SMTP_SZ_PATH, "");
                     }
 
-                    /* 剩余部分作为可选参数（原样裁剪） */
                     if (p < ae) {
                         set_span_trim(pkt->pkt.mail.optional_args, SMTP_SZ_OPTARGS, p, ae);
                     } else {
                         set_cstr(pkt->pkt.mail.optional_args, SMTP_SZ_OPTARGS, "");
                     }
                 } else {
-                    /* 缺少 FROM: 关键字；尽量把整段作为 reverse-path */
                     if (has_arg)
                         set_span_trim(pkt->pkt.mail.reverse_path, SMTP_SZ_PATH, ab, ae);
                     else
@@ -294,10 +272,7 @@ size_t parse_smtp_msg(const uint8_t *buf, size_t buf_len,
             } break;
 
             case SMTP_PKT_RCPT: {
-                /* 语法：RCPT SP TO: forward-path [ SP esmtp-params ] */
                 set_cstr(pkt->pkt.rcpt.command, SMTP_SZ_CMD, "RCPT");
-                // set_space_opt(pkt->pkt.rcpt.space1, has_arg ? 1 : 0);
-                // set_cstr(pkt->pkt.rcpt.to_keyword, SMTP_SZ_CMD, "TO:");
 
                 const char *t1b=NULL, *t1e=NULL;
                 const char *p = next_token(ab, ae, &t1b, &t1e);
@@ -317,7 +292,6 @@ size_t parse_smtp_msg(const uint8_t *buf, size_t buf_len,
                         set_cstr(pkt->pkt.rcpt.optional_args, SMTP_SZ_OPTARGS, "");
                     }
                 } else {
-                    /* 缺少 TO:，尽力兜底 */
                     if (has_arg)
                         set_span_trim(pkt->pkt.rcpt.forward_path, SMTP_SZ_PATH, ab, ae);
                     else
@@ -381,7 +355,6 @@ size_t parse_smtp_msg(const uint8_t *buf, size_t buf_len,
             } break;
 
             case SMTP_PKT_AUTH: {
-                /* 语法：AUTH SP mechanism [ SP initial-response ] */
                 set_cstr(pkt->pkt.auth.command, SMTP_SZ_CMD, "AUTH");
                 if (!has_arg) {
                     set_space_opt(pkt->pkt.auth.space1, 0);
@@ -407,13 +380,11 @@ size_t parse_smtp_msg(const uint8_t *buf, size_t buf_len,
                 set_crlf(pkt->pkt.auth.crlf);
             } break;
             case SMTP_PKT_BDAT: {
-                /* 语法：BDAT SP <size> [SP LAST] CRLF 然后紧跟 <size> 个八位字节（可二进制，不以 CRLF 终止） */
                 set_cstr(pkt->pkt.bdat.command, SMTP_SZ_CMD, "BDAT");
 
-                // 取 <size> token
                 const char *sz_b=NULL, *sz_e=NULL;
                 const char *p = next_token(ab, ae, &sz_b, &sz_e);
-                if (sz_b == sz_e || !sz_b) { /* 无 size，视作非法/空，保持字段为空 */
+                if (sz_b == sz_e || !sz_b) { 
                     set_space_opt(pkt->pkt.bdat.space1, 0);
                     set_cstr(pkt->pkt.bdat.size_str, SMTP_SZ_NUM, "");
                 } else {
@@ -421,7 +392,6 @@ size_t parse_smtp_msg(const uint8_t *buf, size_t buf_len,
                     set_span_trim(pkt->pkt.bdat.size_str, SMTP_SZ_NUM, sz_b, sz_e);
                 }
 
-                // 可选 LAST
                 const char *last_b=NULL, *last_e=NULL;
                 if (p < ae) {
                     const char *p2 = next_token(p, ae, &last_b, &last_e);
@@ -439,30 +409,27 @@ size_t parse_smtp_msg(const uint8_t *buf, size_t buf_len,
                 }
                 set_crlf(pkt->pkt.bdat.crlf);
 
-                /* 抓取随后的 <size> 个原始字节作为 chunk 数据 */
                 uint32_t want = 0;
                 if (!parse_u32_dec(pkt->pkt.bdat.size_str, pkt->pkt.bdat.size_str + strlen(pkt->pkt.bdat.size_str), &want)) {
                     want = 0;
                 }
 
-                /* 当前行的 CRLF 已经由外层推进到 nl（le 指向 '\r' 前的位置），下面推进到下一行开头 */
                 const char *payload_beg = nl + 1;
                 const char *payload_end = end;
                 size_t remain = (size_t)(payload_end - payload_beg);
-                size_t take = (want <= remain) ? (size_t)want : remain; // 不足时尽可能多取
+                size_t take = (want <= remain) ? (size_t)want : remain;
 
                 pkt->pkt.bdat.data     = (const uint8_t*)payload_beg;
                 pkt->pkt.bdat.data_len = (uint32_t)take;
 
-                // 推进游标：跳过这块二进制数据
                 cur = payload_beg + take;
 
                 ++out_n;
-                /* 注意：不要在这里再额外吃一行；BDAT 数据块后面紧接下一个命令或下一段 BDAT */
+
             } break;
 
             default:
-                /* 理论上不会到达 */
+
                 cur = nl + 1;
                 continue;
         }

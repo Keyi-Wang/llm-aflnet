@@ -3,9 +3,9 @@
 
 #include <stdint.h>
 #include <stddef.h>
-#include "mqtt_packets.h"   // 这里包含所有 MQTT 数据结构定义
-#include "../../types.h"          // 包含自定义类型定义
-#include "../../config.h"         // 包含配置相关定义
+#include "mqtt_packets.h"   
+#include "../../types.h"         
+#include "../../config.h"    
 #include <stdbool.h>
 
 #ifdef __cplusplus

@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <string.h>
 
-/* 若未定义 u8/u32，这里补充定义 */
+
 #ifndef u8
 typedef uint8_t  u8;
 #endif
@@ -12,30 +12,29 @@ typedef uint8_t  u8;
 typedef uint32_t u32;
 #endif
 
-/* —— 辅助：安全追加到输出缓冲 —— */
+
 static int out_put(u8 *out, u32 cap, u32 *pos, const char *s) {
-    if (!s || !*s) return 1;                 /* 空串直接成功 */
+    if (!s || !*s) return 1;               
     size_t n = strlen(s);
-    if (*pos > cap || cap - *pos < n) return 0;  /* 容量不足 */
+    if (*pos > cap || cap - *pos < n) return 0;  
     memcpy(out + *pos, s, n);
     *pos += (u32)n;
     return 1;
 }
 
-/* 仅当字段非空时追加（用于可选 space/参数对的一致性） */
+
 static int out_put_if_nonempty(u8 *out, u32 cap, u32 *pos,
                                const char *maybe_space, const char *field) {
-    if (!field || !*field) return 1;         /* 参数为空：二者都不输出 */
+    if (!field || !*field) return 1;        
     if (maybe_space && *maybe_space) {
         if (!out_put(out, cap, pos, maybe_space)) return 0;
     }
     return out_put(out, cap, pos, field);
 }
 
-/* —— 逐条重组 —— */
+
 static int reassemble_one(const ftp_packet_t *p, u8 *out, u32 cap, u32 *pos) {
     switch (p->command_type) {
-        /* 无参数命令：CMD CRLF */
         case FTP_CDUP: if (!out_put(out,cap,pos,p->packet.cdup.command)) return 0;
                        if (!out_put(out,cap,pos,p->packet.cdup.crlf))    return 0; break;
         case FTP_QUIT: if (!out_put(out,cap,pos,p->packet.quit.command)) return 0;
@@ -53,8 +52,6 @@ static int reassemble_one(const ftp_packet_t *p, u8 *out, u32 cap, u32 *pos) {
         case FTP_NOOP: if (!out_put(out,cap,pos,p->packet.noop.command)) return 0;
                        if (!out_put(out,cap,pos,p->packet.noop.crlf))    return 0; break;
 
-        /* 单参数（固定有 space）：CMD SP ARG CRLF
-           注意：如果结构里 ARG 是空串，则会输出 "CMD  \r\n"（与前面 parser 的保形行为一致） */
         case FTP_USER:
             if (!out_put(out,cap,pos,p->packet.user.command))   return 0;
             if (!out_put(out,cap,pos,p->packet.user.space))     return 0;
@@ -164,12 +161,11 @@ static int reassemble_one(const ftp_packet_t *p, u8 *out, u32 cap, u32 *pos) {
             if (!out_put(out,cap,pos,p->packet.site.crlf))      return 0;
             break;
 
-        /* 两段参数命令（第二段可选）：TYPE / ALLO */
+
         case FTP_TYPE:
             if (!out_put(out,cap,pos,p->packet.type.command))   return 0;
             if (!out_put(out,cap,pos,p->packet.type.space1))    return 0;
             if (!out_put(out,cap,pos,p->packet.type.type_code)) return 0;
-            /* 仅当 format_control 非空时输出 space2 + format_control */
             if (p->packet.type.format_control[0]) {
                 if (!out_put(out,cap,pos,p->packet.type.space2))       return 0;
                 if (!out_put(out,cap,pos,p->packet.type.format_control)) return 0;
@@ -188,7 +184,6 @@ static int reassemble_one(const ftp_packet_t *p, u8 *out, u32 cap, u32 *pos) {
             if (!out_put(out,cap,pos,p->packet.allo.crlf))      return 0;
             break;
 
-        /* 可选参数命令：若参数非空才输出（space, param） */
         case FTP_STOU:
             if (!out_put(out,cap,pos,p->packet.stou.command))   return 0;
             if (!out_put_if_nonempty(out,cap,pos,p->packet.stou.space,
@@ -221,12 +216,11 @@ static int reassemble_one(const ftp_packet_t *p, u8 *out, u32 cap, u32 *pos) {
             break;
 
         default:
-            return 0; /* 不支持的类型 —— 理论上不会出现 */
+            return 0; 
     }
     return 1;
 }
 
-/* —— 对外接口 —— */
 int reassemble_ftp_msgs(const ftp_packet_t *packets, u32 num_packets,
                         u8 *output_buf, u32 *out_len)
 {
@@ -237,7 +231,7 @@ int reassemble_ftp_msgs(const ftp_packet_t *packets, u32 num_packets,
     for (u32 i = 0; i < num_packets; ++i) {
         if (!reassemble_one(&packets[i], output_buf, cap, &pos)) {
             *out_len = pos;
-            return -2; /* 缓冲区不足或数据异常 */
+            return -2; 
         }
     }
 

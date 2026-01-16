@@ -76,6 +76,9 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#include <stdatomic.h>
+#include <inttypes.h>
+#include <libgen.h>     // dirname
 //RTSP packets definition
 #include "llm/rtsp/rtsp.h"
 // MQTT packets definition
@@ -107,7 +110,7 @@
 
 /* Lots of globals, but mostly for the status UI and other things where it
    really makes no sense to haul them around as function parameters. */
-
+# define PKTS_MAX 105
 
 EXP_ST u8 *in_dir,                    /* Input directory with test cases  */
           *out_file,                  /* File to fuzz, if any             */
@@ -336,7 +339,8 @@ enum {
   /* 13 */ STAGE_EXTRAS_UI,
   /* 14 */ STAGE_EXTRAS_AO,
   /* 15 */ STAGE_HAVOC,
-  /* 16 */ STAGE_SPLICE
+  /* 16 */ STAGE_SPLICE,
+  /* 17 */ STAGE_SEMANTIC
 };
 
 /* Stage value types */
@@ -463,6 +467,9 @@ u32 grammar_parse_succ = 0;
 u32 grammar_cal_succ = 0;
 u32 semantic_cal_succ = 0;
 u32 semantic_cal_total = 0;
+u32 exec_succ = 0;
+u32 exec_succ_total = 0;
+double exec_succ_ratio = 0;
 double semantic_succ_ratio = 0;
 double grammar_succ_ratio = 0.0;
 u32 nf_semantic_total_sent = 0;
@@ -474,6 +481,19 @@ double nf_grammar_succ_ratio = 0.0;
 static uint64_t g_sem_total_ns = 0;
 static int g_fixer_enabled = 1;  /* default fixer on */
 static int skip_havoc = 0;  /* skip havoc stage */
+static kliter_t(lms) *M2_begin_it = NULL;
+static kliter_t(lms) *M2_end_it   = NULL;
+
+
+
+static _Atomic uint64_t g_pkt_total = 0;
+static _Atomic uint64_t g_pkt_sem_suc = 0;
+static _Atomic uint64_t g_pkt_gram_suc = 0;
+static _Atomic uint64_t g_pkt_suc = 0;
+static int   stats_fd   = -1;                 // CSV 追加日志（可选）
+static char  stats_path[512];                 // CSV 路径
+static char  state_path[512];                 // 累计状态文件
+static char  state_tmp_path[512];             // 临时文件用于原子覆盖
 
 void* generate_packets_by_protocol(const char* protocol_name, int count) {
     if (strcmp(protocol_name, "MQTT") == 0) {
@@ -495,6 +515,91 @@ void* generate_packets_by_protocol(const char* protocol_name, int count) {
     }
 }
 
+static int   m2_shm_id  = -1;
+static u8*   m2_shm_ptr = NULL;
+/* 64B 对齐，保证 __atomic 对齐安全 */
+typedef struct __attribute__((aligned(64))) fuzz_stats_shm {
+  uint64_t magic;     /* 用于校验 */
+  uint32_t version;
+  uint32_t _rsv0;
+
+  uint64_t pkt_total;     /* mask==0 入口次数 */
+  uint64_t pkt_gram_ok;   /* FUZZ_STAT_GRAM_OK */
+  uint64_t pkt_sem_ok;    /* FUZZ_STAT_SEM_OK  */
+  uint64_t pkt_exec_ok;   /* FUZZ_STAT_EXEC_OK */
+
+  uint64_t _pad[8];       /* 预留 */
+} fuzz_stats_shm_t;
+
+#define FUZZ_STATS_MAGIC  0x46555A5A53544154ULL /* "FUZZSTAT" */
+#define FUZZ_STATS_VER    1
+static int stats_shm_id = -1;
+static fuzz_stats_shm_t *stats_shm_ptr = NULL;
+
+static void setup_stats_shm(void) {
+
+  stats_shm_id = shmget(IPC_PRIVATE, sizeof(fuzz_stats_shm_t),
+                        IPC_CREAT | IPC_EXCL | 0600);
+  if (stats_shm_id < 0) PFATAL("shmget() for stats shm failed");
+
+  char *id_str = alloc_printf("%d", stats_shm_id);
+  setenv("AFLNET_STATS_SHM_ID", id_str, 1);
+  ck_free(id_str);
+
+  void *p = shmat(stats_shm_id, NULL, 0);
+  if (!p || p == (void *)-1) PFATAL("shmat() for stats shm failed");
+
+  stats_shm_ptr = (fuzz_stats_shm_t *)p;
+
+  /* 初始化 */
+  memset(stats_shm_ptr, 0, sizeof(*stats_shm_ptr));
+  __atomic_store_n(&stats_shm_ptr->magic, FUZZ_STATS_MAGIC, __ATOMIC_RELEASE);
+  __atomic_store_n(&stats_shm_ptr->version, FUZZ_STATS_VER, __ATOMIC_RELEASE);
+}
+
+/* 可选：退出清理 */
+static void destroy_stats_shm(void) {
+  if (stats_shm_ptr) { shmdt(stats_shm_ptr); stats_shm_ptr = NULL; }
+  if (stats_shm_id >= 0) { shmctl(stats_shm_id, IPC_RMID, NULL); stats_shm_id = -1; }
+}
+
+static void setup_m2bit_shm(void) {
+  m2_shm_id = shmget(IPC_PRIVATE, 1, IPC_CREAT | IPC_EXCL | 0600);
+  if (m2_shm_id < 0) PFATAL("shmget() for M2-bit failed");
+
+  char* id_str = alloc_printf("%d", m2_shm_id);
+  setenv("AFLNET_M2BIT_SHM_ID", id_str, 1);
+  ck_free(id_str);
+
+  m2_shm_ptr = shmat(m2_shm_id, NULL, 0);
+  if (!m2_shm_ptr || m2_shm_ptr == (void*)-1) PFATAL("shmat() for M2-bit failed");
+
+  m2_shm_ptr[0] = 0; // 初始：非M2
+}
+
+static void m2bit_set(int on) {
+  if (!m2_shm_ptr) return;
+  // bit0 = on
+  u8 v = (u8)(on ? 1 : 0);
+  __atomic_store_n(&m2_shm_ptr[0], v, __ATOMIC_RELEASE);
+}
+
+static void destroy_m2bit_shm(void) {
+  if (m2_shm_ptr && m2_shm_ptr != (void*)-1) shmdt(m2_shm_ptr);
+  m2_shm_ptr = NULL;
+  if (m2_shm_id >= 0) shmctl(m2_shm_id, IPC_RMID, NULL);
+  m2_shm_id = -1;
+}
+
+void fflush_state_file(void){
+  FILE *fp = fopen(state_path, "r");
+  if (!fp) return;
+  if (freopen(state_path, "w", fp)) {
+    // optional: ensure it's really empty on disk
+    fflush(fp);
+  }
+  fclose(fp);
+}
 
 /* Initialize the implemented state machine as a graphviz graph */
 void setup_ipsm()
@@ -1147,10 +1252,19 @@ int send_over_network()
     M3_cal_cnt += M3_cur_cnt;
     M2_cal_cnt += M2_cur_cnt;
   }
-  if(strcmp(stage_short,"sem")==0) {
-    semantic_total_sent = semantic_total_sent + M2_start_region_ID + M2_cur_cnt + M3_cur_cnt;
-  }
+  // if(strcmp(stage_short,"sem")==0 && strcmp(protocol_name,"MQTT")==0){ 
+  //   // semantic_total_sent = semantic_total_sent + M2_start_region_ID + M2_cur_cnt + M3_cur_cnt;
+  //   // For MQTT, we consider M2 as semantic regions
+  //   semantic_total_sent = semantic_total_sent + M2_cur_cnt;
+  // }
   for (it = kl_begin(kl_messages); it != kl_end(kl_messages); it = kl_next(it)) {
+    // calculate M2 region only
+    // TODO： shm to notify M2 region
+    // if (it == M2_begin_it) m2bit_set(1);
+    // if (it == M2_end_it)   m2bit_set(0);
+    if(messages_sent == M2_start_region_ID) m2bit_set(1);
+    if(messages_sent == M2_start_region_ID + M2_cur_cnt) m2bit_set(0);
+
     n = net_send(sockfd, timeout, kl_val(it)->mdata, kl_val(it)->msize);
     messages_sent++;
 
@@ -1176,9 +1290,11 @@ int send_over_network()
     if (prev_buf_size == response_buf_size) likely_buggy = 1;
     else likely_buggy = 0;
   }
+  if (M2_end_it == kl_end(kl_messages)) m2bit_set(0);
+
 
 HANDLE_RESPONSES:
-
+  m2bit_set(0);
   net_recv(sockfd, timeout, poll_wait_msecs, &response_buf, &response_buf_size);
 
   if (messages_sent > 0 && response_bytes != NULL) {
@@ -2314,6 +2430,7 @@ EXP_ST void setup_shm(void) {
 }
 
 
+
 /* Load postprocessor, if available. */
 
 static void setup_post(void) {
@@ -3006,11 +3123,9 @@ EXP_ST void init_forkserver(char** argv) {
        specified, stdin is /dev/null; otherwise, out_fd is cloned instead. */
 
     setsid();
-    
-    dup2(dev_null_fd, 1);
-    dup2(dev_null_fd, 2);
+
     // char log_path[512];
-    // snprintf(log_path, sizeof(log_path), "%s/mosquitto_log.txt", out_dir);
+    // snprintf(log_path, sizeof(log_path), "%s/server_log.txt", out_dir);
     // int log_fd = open(log_path, O_CREAT | O_WRONLY | O_APPEND, 0644);
     // if (log_fd >= 0) {
     //     dup2(log_fd, 1); // 重定向 stdout
@@ -3021,7 +3136,8 @@ EXP_ST void init_forkserver(char** argv) {
     //     dup2(dev_null_fd, 2);
     // }
 
-
+    dup2(dev_null_fd, 1);
+    dup2(dev_null_fd, 2);
 
     if (out_file) {
 
@@ -4161,7 +4277,7 @@ static void write_crash_readme(void) {
    entry is saved, 0 otherwise. */
 
 static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
-
+  // return 1;
   u8  *fn = "";
   u8  hnb;
   //s32 fd;
@@ -4544,28 +4660,9 @@ static void write_stats_file(double bitmap_cvg, double stability, double eps) {
 
 
 static void check_term_size(void);
-#include <stdatomic.h>
-#include <inttypes.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <time.h>
-#include <errno.h>
-#include <string.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <libgen.h>     // dirname
-#include <sys/stat.h>
-#include <sys/types.h>
 
-static _Atomic uint64_t g_pkt_total = 0;
-static _Atomic uint64_t g_pkt_suc = 0;
-static _Atomic uint64_t g_pkt_gram_suc = 0;
-static int   stats_fd   = -1;                 // CSV 追加日志（可选）
-static char  stats_path[512];                 // CSV 路径
-static char  state_path[512];                 // 累计状态文件
-static char  state_tmp_path[512];             // 临时文件用于原子覆盖
 
-static void stats_load_state(void) {
+static void init_state_file(void){
     const char *state = getenv("FUZZ_STATE");
     if (!state || !*state) {
       if(strcmp(protocol_name, "MQTT") == 0) {
@@ -4573,20 +4670,74 @@ static void stats_load_state(void) {
       } else if(strcmp(protocol_name, "RTSP") == 0) {
         state = "/tmp/live555_state.txt";
       } else if(strcmp(protocol_name, "FTP") == 0) {
-        state = "/tmp/ftp_state.txt";
-      } 
+        state = "/tmp/ftp_fuzz_state.txt";
+      } else if(strcmp(protocol_name, "SMTP") == 0) {
+        state = "/tmp/smtp_fuzz_state.txt";
+      } else if(strcmp(protocol_name, "DTLS12") == 0) {
+        state = "/tmp/dtls12_fuzz_state.txt";
+      } else if(strcmp(protocol_name, "SIP") == 0) {
+        state = "/tmp/sip_fuzz_state.txt";
+      } else {
+        state = "/tmp/fuzz_state.txt";
+      }
     }
     snprintf(state_path, sizeof(state_path), "%s", state);
-    FILE *fp = fopen(state_path, "r");
-    if (!fp) return; // 首次运行，没有就算了
-    uint64_t t=0, e=0, r=0, g=0;
-    if (fscanf(fp, "%" SCNu64 " %" SCNu64 " %" SCNu64, &t, &r, &g) == 3) {
-        atomic_store(&g_pkt_total, t);
-        atomic_store(&g_pkt_suc, r);
-        atomic_store(&g_pkt_gram_suc, g);
-    }
-    fclose(fp);
 }
+// #include <sys/shm.h>
+// #include <errno.h>
+
+// #define FUZZ_STATS_MAGIC   0x46555A5A53544154ULL /* "FUZZSTAT" */
+
+// typedef struct __attribute__((aligned(64))) fuzz_stats_shm {
+//     uint64_t magic;
+//     uint32_t version;
+//     uint32_t _rsv0;
+
+//     uint64_t pkt_total;
+//     uint64_t pkt_gram_ok;
+//     uint64_t pkt_sem_ok;
+//     uint64_t pkt_exec_ok;
+
+//     uint64_t _pad[8];
+// } fuzz_stats_shm_t;
+
+// static fuzz_stats_shm_t *stats_shm_ptr = NULL;
+
+static void stats_attach_from_env(void) {
+    if (stats_shm_ptr) return;
+
+    const char *s = getenv("AFLNET_STATS_SHM_ID");
+    if (!s || !*s) return;
+
+    int id = atoi(s);
+    void *p = shmat(id, NULL, SHM_RDONLY);
+    if (!p || p == (void*)-1) {
+        stats_shm_ptr = NULL;
+        return;
+    }
+    stats_shm_ptr = (fuzz_stats_shm_t*)p;
+}
+
+static void stats_load_state(void) {
+
+    stats_attach_from_env();
+    if (!stats_shm_ptr) return;  // 没有 shm 就当没统计
+
+    /* 可选：检查 magic，防止 attach 到了错误的段 */
+    uint64_t mg = __atomic_load_n(&stats_shm_ptr->magic, __ATOMIC_ACQUIRE);
+    if (mg != FUZZ_STATS_MAGIC) return;
+
+    uint64_t t = __atomic_load_n(&stats_shm_ptr->pkt_total,   __ATOMIC_RELAXED);
+    uint64_t r = __atomic_load_n(&stats_shm_ptr->pkt_sem_ok,  __ATOMIC_RELAXED);
+    uint64_t g = __atomic_load_n(&stats_shm_ptr->pkt_gram_ok, __ATOMIC_RELAXED);
+    uint64_t s = __atomic_load_n(&stats_shm_ptr->pkt_exec_ok, __ATOMIC_RELAXED);
+
+    atomic_store(&g_pkt_total,   t);
+    atomic_store(&g_pkt_sem_suc, r);
+    atomic_store(&g_pkt_gram_suc,g);
+    atomic_store(&g_pkt_suc,     s);
+}
+
 
 // static void write_valid_csv(void){
 //     const char *csv = getenv("MOSQ_FUZZ_STATS");
@@ -4611,15 +4762,7 @@ static void stats_load_state(void) {
 //         (long)time(NULL), total_msg_send, e, p1, r, p2);
 
 // }
-static size_t pkt_elem_size(const char *p) {
-  if (!strcmp(p,"MQTT"))   return sizeof(mqtt_packet_t);
-  if (!strcmp(p,"RTSP"))   return sizeof(rtsp_packet_t);
-  if (!strcmp(p,"FTP"))    return sizeof(ftp_packet_t);
-  if (!strcmp(p,"SMTP"))   return sizeof(smtp_packet_t);
-  if (!strcmp(p,"SIP"))    return sizeof(sip_packet_t);
-  if (!strcmp(p,"DTLS12")) return sizeof(dtls_packet_t);
-  return 0;
-}
+
 /* Update the plot file if there is a reason to. */
 
 static void maybe_update_plot_file(double bitmap_cvg, double eps) {
@@ -4652,17 +4795,26 @@ static void maybe_update_plot_file(double bitmap_cvg, double eps) {
      unix_time, cycles_done, cur_path, paths_total, paths_not_fuzzed,
      favored_not_fuzzed, unique_crashes, unique_hangs, max_depth,
      execs_per_sec */
-
+  stats_load_state();
+  u32 M2_total_cnt = 0;
+  // if(strcmp(protocol_name, "MQTT") == 0) {
+  //   M2_total_cnt = M2_cal_cnt;
+  // } 
+  // else{
+    M2_total_cnt = g_pkt_total;
+  // }
+  double ratio0 = (double)g_pkt_suc / (double)(M2_total_cnt ? M2_total_cnt : 1);
+  double ratio1 = (double)g_pkt_sem_suc / (double)(M2_total_cnt ? M2_total_cnt : 1);
+  double ratio2 = (double)g_pkt_gram_suc / (double)(M2_total_cnt ? M2_total_cnt : 1);
   fprintf(plot_file,
-        "%llu, %llu, %u, %u, %u, %u, %0.02f%%, %llu, %llu, %u, %0.02f, %u, %u, %u, %llu, %llu, %u, %u, %u, %.3f, %u, %u, %u, %.3f, %.3f, %u, %u, %u, %.3f, %.3f\n",
+        "%llu, %llu, %u, %u, %u, %u, %0.02f%%, %llu, %llu, %u, %0.02f, %u, %u, %u, %.3f, %u, %u, %u, %u, %.3f, %.3f, %.3f, %u, %u, %u, %u, %.3f, %.3f, %.3f\n",
         get_cur_time() / 1000, queue_cycle - 1, current_entry, queued_paths,
         pending_not_fuzzed, pending_favored, bitmap_cvg, unique_crashes,
-        unique_hangs, max_depth, eps, M2_start_region_ID, M2_region_count,
-        region_cnt, (unsigned long long)g_pkt_total,
-        (unsigned long long)g_pkt_suc, M1_cal_cnt, M2_cal_cnt, M3_cal_cnt,
-        (g_sem_total_ns / 1e9), semantic_cal_succ, grammar_cal_succ, semantic_cal_total, semantic_succ_ratio, grammar_succ_ratio,
-        nf_semantic_cal_succ, nf_grammar_cal_succ, nf_semantic_cal_total, nf_semantic_succ_ratio, nf_grammar_succ_ratio);
-
+        unique_hangs, max_depth, eps, M2_start_region_ID, M2_region_count,M2_cur_cnt, 
+        (g_sem_total_ns / 1e9), 
+        exec_succ_total, semantic_cal_succ, grammar_cal_succ, semantic_cal_total, exec_succ_ratio, semantic_succ_ratio, grammar_succ_ratio,
+        // nf_semantic_cal_succ, nf_grammar_cal_succ, nf_semantic_cal_total, nf_semantic_succ_ratio, nf_grammar_succ_ratio);
+        g_pkt_suc, g_pkt_sem_suc, g_pkt_gram_suc, M2_total_cnt, ratio0, ratio1, ratio2);
 
 
   fflush(plot_file);
@@ -5695,6 +5847,7 @@ EXP_ST u8 common_fuzz_stuff(char** argv, u8* out_buf, u32 len) {
   region_t *regions = (*extract_requests)(out_buf, len, &region_count);
   if (!region_count) PFATAL("AFLNet Region count cannot be Zero");
   M2_cur_cnt = region_count > max_seed_region_count ? max_seed_region_count : region_count;
+
   // update kl_messages linked list
   u32 i;
   kliter_t(lms) *prev_last_message, *cur_last_message;
@@ -5763,6 +5916,20 @@ EXP_ST u8 common_fuzz_stuff(char** argv, u8* out_buf, u32 len) {
     next_it = kl_next(next_it);
   } while(cur_it != M2_next);
 
+  /* new M2 region is [new_begin, M2_next) */
+  // if (M2_prev == NULL) {
+  //   M2_begin_it = kl_begin(kl_messages);
+  // } else {
+  //   M2_begin_it = kl_next(M2_prev);
+  // }
+
+  // if(M2_next == NULL){
+  //   M2_end_it = kl_end(kl_messages);
+  // }
+  // else{
+  //   M2_end_it = M2_next; 
+  // }
+   
   /* End of AFLNet code */
   fault = run_target(argv, exec_tmout);
 
@@ -6140,6 +6307,15 @@ int __sem_counted = 0;
 /* Take the current entry from the queue, fuzz it for a while. This
    function is a tad too long... returns 0 if fuzzed successfully, 1 if
    skipped or bailed out. */
+static size_t pkt_elem_size(const char *p) {
+  if (!strcmp(p,"MQTT"))   return sizeof(mqtt_packet_t);
+  if (!strcmp(p,"RTSP"))   return sizeof(rtsp_packet_t);
+  if (!strcmp(p,"FTP"))    return sizeof(ftp_packet_t);
+  if (!strcmp(p,"SMTP"))   return sizeof(smtp_packet_t);
+  if (!strcmp(p,"SIP"))    return sizeof(sip_packet_t);
+  if (!strcmp(p,"DTLS12")) return sizeof(dtls_packet_t);
+  return 0;
+}
 
 static u8 fuzz_one(char** argv) {
 
@@ -7304,25 +7480,28 @@ havoc_stage:
 // Step 1: Check if out_buf is valid according to parser(generated by LLM). If not, skip it (jump to havoc stage). Return structured messages (M2).
 
 parser_through++;
-packets = generate_packets_by_protocol(protocol_name, 105);
-if(!packets) goto real_havoc_stage;
+packets = generate_packets_by_protocol(protocol_name, PKTS_MAX);
+if(packets == NULL) {
+  // printf("Failed to allocate memory for packets\n");
+  goto real_havoc_stage;
+}
 if(strcmp(protocol_name, "MQTT") == 0) {
-  pkt_num = parse_mqtt_msg(out_buf, len, (mqtt_packet_t*)packets, 105);
+  pkt_num = parse_mqtt_msg(out_buf, len, (mqtt_packet_t*)packets, PKTS_MAX);
 }
 else if(strcmp(protocol_name, "RTSP") == 0){
-  pkt_num = parse_rtsp_msg(out_buf, len, (rtsp_packet_t*)packets, 105);
+  pkt_num = parse_rtsp_msg(out_buf, len, (rtsp_packet_t*)packets, PKTS_MAX);
 }
 else if(strcmp(protocol_name, "FTP") == 0){
-  pkt_num = parse_ftp_msg(out_buf, len, (ftp_packet_t*)packets, 105);
+  pkt_num = parse_ftp_msg(out_buf, len, (ftp_packet_t*)packets, PKTS_MAX);
 }
 else if(strcmp(protocol_name, "SMTP") == 0){
-  pkt_num = parse_smtp_msg(out_buf, len, (smtp_packet_t*)packets, 105);
+  pkt_num = parse_smtp_msg(out_buf, len, (smtp_packet_t*)packets, PKTS_MAX);
 }
 else if(strcmp(protocol_name, "SIP") == 0){
-  pkt_num = parse_sip_msg(out_buf, len, (sip_packet_t*)packets, 105);
+  pkt_num = parse_sip_msg(out_buf, len, (sip_packet_t*)packets, PKTS_MAX);
 }
 else if(strcmp(protocol_name, "DTLS12") == 0){
-  pkt_num = parse_dtls_msg(out_buf, len, (dtls_packet_t*)packets, 105);
+  pkt_num = parse_dtls_msg(out_buf, len, (dtls_packet_t*)packets, PKTS_MAX);
 }
 else{
   // printf("Unsupported Protocol: %s\n", protocol_name);
@@ -7331,25 +7510,11 @@ else{
 }
 
 
-if (pkt_num <= 0) {
-  // printf("未能解析出任何报文\n");
+if (!pkt_num) {
   free(packets);
   goto real_havoc_stage;
 }else{
   parser_success++;
-  if(strcmp(protocol_name, "MQTT") == 0) {
-    // print_mqtt_packets(packets, pkt_num);
-  }
-  else if(strcmp(protocol_name, "RTSP") == 0){
-    // printf("out_buf: %s\n", out_buf);
-    // print_rtsp_packets(packets, pkt_num);
-  }
-  else if(strcmp(protocol_name, "FTP") == 0){
-    // print_ftp_packets(packets, pkt_num);
-    // printf("pkt_num: %zu\n", pkt_num);
-  }
-
-
 }
 
 void *seed_pkts = generate_packets_by_protocol(protocol_name, pkt_num);
@@ -7357,26 +7522,23 @@ if (!seed_pkts) {
   free(packets);
   goto real_havoc_stage;
 }
-size_t esz = pkt_elem_size(protocol_name);
-// mqtt_packet_t *seed_pkts = malloc(pkt_num * sizeof(*seed_pkts));
-memcpy(seed_pkts, packets, (size_t)pkt_num * esz);
+u32 esz = pkt_elem_size(protocol_name);
 
+memcpy(seed_pkts, packets, pkt_num * esz);
 // stats_load_state();
-uint64_t __t0_sem = sem_now_ns();   /* 入口打点 */ 
+uint64_t __t0_sem = sem_now_ns(); 
 // Step 2: Choose a random field in the structured messages and apply LLM-generated mutator to it. Return mutated structured messages(M2').
 stage_name  = "semantic";
 stage_short = "sem";
+orig_hit_cnt = new_hit_cnt;
 
-// semantic_parse_succ = g_pkt_suc;
-// grammar_parse_succ = g_pkt_gram_suc;
-// semantic_total_sent = 0;
-// Step 3: Repeat Step 2 for a random number of times.
 stage_max   = (doing_det ? HAVOC_CYCLES_INIT : HAVOC_CYCLES) *
                   perf_score / havoc_div / 100;
 semantic_queue = queued_paths;
 
 for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
-  memcpy(packets, seed_pkts, (size_t)pkt_num * esz);
+  memset(packets, 0, pkt_elem_size(protocol_name) * PKTS_MAX);
+  memcpy(packets, seed_pkts, pkt_num * esz);
 
   u32 rounds = rand() % 10 + 1;
   // u32 rounds = 1;
@@ -7398,65 +7560,7 @@ for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
   else if(strcmp(protocol_name, "DTLS12") == 0){
     dispatch_dtls_multiple_mutations(packets, pkt_num, rounds);
   }
-  
-  // experiments: no-fixer packet valid count
-  // stats_load_state();
-  // semantic_parse_succ = g_pkt_suc;
-  // grammar_parse_succ = g_pkt_gram_suc;
-  // semantic_total_sent = 0;
-  // memset(output_buf, 0, sizeof(output_buf));
-  // out_len = 0;
-  // if(strcmp(protocol_name, "MQTT") == 0) {
-  //   if (reassemble_mqtt_msgs(packets, pkt_num, output_buf, &out_len) != 0) {
-  //     continue;;
-  //       // printf("成功生成 %zu 字节的 MQTT 消息\n", out_len);
-  //   }
-  // }
-  // else if(strcmp(protocol_name, "RTSP") == 0){
-  //   if (reassemble_rtsp_msgs(packets, pkt_num, output_buf, &out_len) != 0) {
-  //     continue;
-  //       // printf("成功生成 %zu 字节的 RTSP 消息\n", out_len);
-  //   }
-  // }
-  // else if(strcmp(protocol_name, "FTP") == 0){
-  //   if (reassemble_ftp_msgs(packets, pkt_num, output_buf, &out_len) != 0) {
-  //     printf("FTP_重组失败,跳过\n");
-  //     continue;
-       
-  //   }
-  // }
-  // else if(strcmp(protocol_name, "SMTP") == 0){
-  //   if (reassemble_smtp_msgs(packets, pkt_num, output_buf, &out_len) != 0) {
-  //     printf("SMTP_重组失败,跳过\n");
-  //     continue;
-       
-  //   }
-  // }
-  // else if(strcmp(protocol_name, "SIP") == 0){
-  //   if (reassemble_sip_msgs(packets, pkt_num, output_buf, &out_len) != 0) {
-  //     printf("SIP_重组失败,跳过\n");
-  //     continue;
-       
-  //   }
-  // }
-  // if(out_len > MAX_FILE || out_len < 1) {
-  //   // printf("重组后的报文长度超过最大限制，跳过\n");
-  //   continue;
-  // }
 
-  // if (common_fuzz_stuff(argv, output_buf, out_len)) {
-  //   SEM_ACCUM_ONCE();
-  //   goto abandon_entry;
-  // }
-  // stats_load_state();
-  // semantic_parse_succ = g_pkt_suc - semantic_parse_succ;
-  // nf_semantic_cal_succ += semantic_parse_succ;
-  // grammar_parse_succ = g_pkt_gram_suc - grammar_parse_succ;
-  // nf_grammar_cal_succ += grammar_parse_succ;
-  // nf_semantic_cal_total += semantic_total_sent;
-  // nf_semantic_succ_ratio = (double)nf_semantic_cal_succ / (double)nf_semantic_cal_total;
-  // nf_grammar_succ_ratio = (double)nf_grammar_cal_succ / (double)nf_semantic_cal_total;
-  // // // Step 4: Fix the M2' according to thr LLM-generated fixer. Return fixed structured messages(M2'').
   if(g_fixer_enabled){
     if(strcmp(protocol_name, "MQTT") == 0) {
       fix_mqtt(packets, pkt_num);
@@ -7475,13 +7579,10 @@ for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
     }
     else if(strcmp(protocol_name, "DTLS12") == 0){
       fix_dtls(packets, pkt_num);
-    }
+    } 
   }
+  
 
-  // stats_load_state();
-  // semantic_parse_succ = g_pkt_suc;
-  // grammar_parse_succ = g_pkt_gram_suc;
-  // semantic_total_sent = 0;
   // Step 5: Convert M2'' back to byte format according to the reassembly function(generated by LLM). Return byte format output(out_buf').
   memset(output_buf, 0, sizeof(output_buf));
   out_len = 0;
@@ -7532,20 +7633,38 @@ for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
     continue;
   }
 
+  stats_load_state();
+  semantic_parse_succ = g_pkt_sem_suc;
+  grammar_parse_succ = g_pkt_gram_suc;
+  exec_succ = g_pkt_suc;
+  // if(strcmp(protocol_name, "MQTT")==0){
+  //   semantic_total_sent = 0;
+  // }
+  // else{
+    semantic_total_sent = g_pkt_total;
+  // }
   if (common_fuzz_stuff(argv, output_buf, out_len)) {
     SEM_ACCUM_ONCE();
     free(packets);
     free(seed_pkts);
     goto abandon_entry;
   }
-  // stats_load_state();
-  // semantic_parse_succ = g_pkt_suc - semantic_parse_succ;
-  // semantic_cal_succ += semantic_parse_succ;
-  // grammar_parse_succ = g_pkt_gram_suc - grammar_parse_succ;
-  // grammar_cal_succ += grammar_parse_succ;
-  // semantic_cal_total += semantic_total_sent;
-  // semantic_succ_ratio = (double)semantic_cal_succ / (double)semantic_cal_total;
-  // grammar_succ_ratio = (double)grammar_cal_succ / (double)semantic_cal_total;
+  stats_load_state();
+  semantic_parse_succ = g_pkt_sem_suc - semantic_parse_succ;
+
+  // if(strcmp(protocol_name, "MQTT")!=0){
+    semantic_total_sent = g_pkt_total - semantic_total_sent;
+  // }
+
+  semantic_cal_succ += semantic_parse_succ;
+  grammar_parse_succ = g_pkt_gram_suc - grammar_parse_succ;
+  grammar_cal_succ += grammar_parse_succ;
+  exec_succ = g_pkt_suc - exec_succ;
+  exec_succ_total += exec_succ;
+  semantic_cal_total += semantic_total_sent;
+  semantic_succ_ratio = (double)semantic_cal_succ / (double)semantic_cal_total;
+  grammar_succ_ratio = (double)grammar_cal_succ / (double)semantic_cal_total;
+  exec_succ_ratio = (double)exec_succ_total / (double)semantic_cal_total;
       /* out_buf might have been mangled a bit, so let's restore it to its
        original size and shape. */
   if (queued_paths != semantic_queue) {
@@ -7560,22 +7679,23 @@ for(stage_cur = 0; stage_cur < stage_max; stage_cur++) {
   }
 
 }
-// stats_load_state();
+  new_hit_cnt = queued_paths + unique_crashes;
+
+
+  stage_finds[STAGE_SEMANTIC]  += new_hit_cnt - orig_hit_cnt;
+  stage_cycles[STAGE_SEMANTIC] += stage_max;
+
+
 g_sem_total_ns += (sem_now_ns() - __t0_sem);  /* 退出累加 */
-// semantic_parse_succ = g_pkt_suc - semantic_parse_succ;
-// semantic_cal_succ += semantic_parse_succ;
-// grammar_parse_succ = g_pkt_gram_suc - grammar_parse_succ;
-// grammar_cal_succ += grammar_parse_succ;
-// semantic_cal_total += semantic_total_sent;
-// semantic_succ_ratio = (double)semantic_cal_succ / (double)semantic_cal_total;
-// grammar_succ_ratio = (double)grammar_cal_succ / (double)semantic_cal_total;
+
 free(packets);
 free(seed_pkts);
-
+show_stats();
 real_havoc_stage:
   if(skip_havoc){
     goto abandon_entry;
   }
+  // goto abandon_entry;
   /* If we get here, we're about to enter the havoc stage. */
   stage_cur_byte = -1;
 
@@ -8863,7 +8983,7 @@ EXP_ST void setup_dirs_fds(void) {
 
   fprintf(plot_file, "# unix_time, cycles_done, cur_path, paths_total, "
                      "pending_total, pending_favs, map_size, unique_crashes, "
-                     "unique_hangs, max_depth, execs_per_sec, M2_start_region_ID, M2_region_count, region_cnt, server_receive_cnt, parser_success, M1_cal_cnt, M2_cal_cnt, M3_cal_cnt, semantic_exec_time, semantic_cal_succ, grammar_cal_succ, semantic_cal_total, semantic_succ_ratio, grammar_succ_ratio, nf_semantic_cal_succ, nf_grammar_cal_succ, nf_semantic_cal_total, nf_semantic_succ_ratio, nf_grammar_succ_ratio\n");
+                     "unique_hangs, max_depth, execs_per_sec, M2_start_region_ID, M2_region_count, M2_cur_cnt, semantic_exec_time, SEM_M2_succ, SEM_M2_sem_succ, SEM_M2_gram_succ, SEM_M2_total, SEM_M2_succ_ratio, SEM_M2_sem_succ_ratio, SEM_M2_gram_succ_ratio, LEMUR_M2_succ, LEMUR_M2_sem_succ, LEMUR_M2_gram_succ, LEMUR_M2_total, LEMUR_M2_succ_ratio, LEMUR_M2_sem_succ_ratio, LEMUR_M2_gram_succ_ratio\n");
                      /* ignore errors */
 
 }
@@ -9819,6 +9939,7 @@ int main(int argc, char** argv) {
 
   if (getenv("AFL_LD_PRELOAD"))
     FATAL("Use AFL_PRELOAD instead of AFL_LD_PRELOAD");
+
   if (getenv("FIXER_OFF"))
   {
     g_fixer_enabled = 0;
@@ -9852,6 +9973,10 @@ int main(int argc, char** argv) {
 
   setup_post();
   setup_shm();
+  setup_m2bit_shm();
+  setup_stats_shm();
+
+  init_state_file();
   init_count_class16();
 
   setup_ipsm();
@@ -9882,7 +10007,7 @@ int main(int argc, char** argv) {
     use_argv = argv + optind;
 
   perform_dry_run(use_argv);
-
+  fflush_state_file();
   cull_queue();
 
   show_init_stats();

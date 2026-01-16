@@ -1,6 +1,6 @@
 #include "mqtt.h"
 
-// 写 2 字节长度前缀字符串
+
 size_t write_utf8_str(uint8_t *buf, const char *str) {
     size_t len = strlen(str);
     buf[0] = (len >> 8) & 0xFF;
@@ -9,7 +9,6 @@ size_t write_utf8_str(uint8_t *buf, const char *str) {
     return len + 2;
 }
 
-// 写 MQTT 剩余长度（Variable Byte Integer 编码）
 size_t write_remaining_length(uint8_t *buf, uint32_t len) {
     size_t i = 0;
     do {
@@ -21,7 +20,6 @@ size_t write_remaining_length(uint8_t *buf, uint32_t len) {
     return i;
 }
 
-// 写 2 字节整数
 void write_uint16(uint8_t *buf, uint16_t val) {
     buf[0] = (val >> 8) & 0xFF;
     buf[1] = val & 0xFF;
@@ -147,17 +145,13 @@ int reassemble_a_mqtt_msg(const mqtt_packet_t *pkt, u8 *output_buf, u32 *out_len
             break;
         }
 
-        /* ====== 新增：PUBLISH 响应类 ====== */
 
         case TYPE_PUBACK: {
             const mqtt_puback_packet_t *pa = &pkt->puback;
 
-            /* 必含：Packet Identifier */
             write_uint16(payload_buf + payload_len, pa->variable_header.packet_identifier);
             payload_len += 2;
 
-            /* MQTT 5 可选：Reason Code + Properties
-               约定：若 reason_code != 0 或 property_len > 0，则一并编码；否则仅 2 字节 PID */
             if (pa->variable_header.reason_code >= 0 || pa->variable_header.property_len >= 0) {
                 payload_buf[payload_len++] = pa->variable_header.reason_code;
                 u32 len = pa->variable_header.property_len;
@@ -224,8 +218,6 @@ int reassemble_a_mqtt_msg(const mqtt_packet_t *pkt, u8 *output_buf, u32 *out_len
             break;
         }
 
-        /* ====== 其他已有类型 ====== */
-
         case TYPE_UNSUBSCRIBE: {
             const mqtt_unsubscribe_packet_t *unsub = &pkt->unsubscribe;
 
@@ -267,16 +259,12 @@ int reassemble_a_mqtt_msg(const mqtt_packet_t *pkt, u8 *output_buf, u32 *out_len
         }
 
         case TYPE_PINGREQ: {
-            /* PINGREQ 无 payload */
             break;
         }
 
         case TYPE_DISCONNECT: {
             const mqtt_disconnect_packet_t *dc = &pkt->disconnect;
 
-            /* remaining_length 的规则：
-               - 若 reason_code==0 且 property_len==0，则 RL=0（无 payload）
-               - 否则 payload = [reason_code][prop_len(varint)][props] */
             if (dc->variable_header.reason_code != 0 || dc->variable_header.property_len > 0) {
                 /* reason code */
                 payload_buf[payload_len++] = dc->variable_header.reason_code;
@@ -296,8 +284,6 @@ int reassemble_a_mqtt_msg(const mqtt_packet_t *pkt, u8 *output_buf, u32 *out_len
             return -1;
     }
 
-    /* -------- Fixed header 映射 --------
-       注意：PUBREL 的低 4 位必须为 0x2（0x62），其他三个响应包低 4 位为 0。 */
     uint8_t first_byte = 0;
     switch (pkt->type) {
         case TYPE_CONNECT:     first_byte = 0x10; break;
@@ -306,17 +292,16 @@ int reassemble_a_mqtt_msg(const mqtt_packet_t *pkt, u8 *output_buf, u32 *out_len
             uint8_t qos    = pkt->publish.qos & 0x03;
             uint8_t dup    = pkt->publish.dup ? 1 : 0;
             uint8_t retain = pkt->publish.retain ? 1 : 0;
-            if (qos == 0) dup = 0;  /* QoS 0 时 DUP 规范上应为 0 */
+            if (qos == 0) dup = 0;  
             first_byte = (uint8_t)(0x30 | (dup << 3) | (qos << 1) | retain);
             break;
         }
         case TYPE_UNSUBSCRIBE: first_byte = 0xA2; break;
         case TYPE_AUTH:        first_byte = 0xF0; break;
 
-        /* 新增响应类固定头 */
         case TYPE_PUBACK:      first_byte = 0x40; break;  /* 0100 0000 */
         case TYPE_PUBREC:      first_byte = 0x50; break;  /* 0101 0000 */
-        case TYPE_PUBREL:      first_byte = 0x62; break;  /* 0110 0010 (低 4 位必须 0x2) */
+        case TYPE_PUBREL:      first_byte = 0x62; break;  /* 0110 0010 */
         case TYPE_PUBCOMP:     first_byte = 0x70; break;  /* 0111 0000 */
         case TYPE_PINGREQ:    first_byte = 0xC0; break; /* C0 00 */
         case TYPE_DISCONNECT: first_byte = 0xE0; break; /* E0 <rem-len> */
@@ -344,16 +329,14 @@ int reassemble_mqtt_msgs(const mqtt_packet_t *packets, u32 num_packets, u8 *outp
     *out_len = 0;
 
     for (u32 j = 0; j < num_packets; ++j) {
-        u8 temp_buf[1024 * 1024]; // 临时缓冲区
+        u8 temp_buf[1024 * 1024]; 
         u32 temp_len = 0;
 
         if (reassemble_a_mqtt_msg(&packets[j], temp_buf, &temp_len) != 0) {
-            // printf("❌ 第 %zu 条消息重组失败，跳过\n", j);
             continue;
         }
 
         if (offset + temp_len >= MAX_FILE) {
-            // printf("⚠️ 消息序列长度超过限制，截断\n");
             break;
         }
 

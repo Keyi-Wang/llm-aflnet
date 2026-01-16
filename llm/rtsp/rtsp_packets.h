@@ -7,7 +7,7 @@
 #define RTSP_METHOD_LEN        16
 #define RTSP_URI_LEN           256
 #define RTSP_VERSION_LEN       16
-#define MAX_RTSP_BODY_LEN     1024// 最大 RTSP 消息长度
+#define MAX_RTSP_BODY_LEN     1024
 
 
 /* ===========================
@@ -42,7 +42,7 @@ typedef struct {
     char colon_space[RTSP_SEPARATOR_LEN]; // ": "
     struct {
         char language_tag[16];            // "en-US"
-        char qvalue[8];                   // "0.8"（可为空字符串）
+        char qvalue[8];                   // "0.8"
     } entries[MAX_ACCEPT_LANG];
     int entry_count;
     char crlf[RTSP_CRLF_LEN];              // "\r\n"
@@ -58,7 +58,7 @@ typedef struct {
     char colon_space[RTSP_SEPARATOR_LEN]; // ": "
     char auth_type[16];                   // "Basic" / "Digest"
     char space;                           // ' '
-    char credentials[128];                // Base64 或 Digest 参数串
+    char credentials[128];                
     char crlf[RTSP_CRLF_LEN];
 } authorization_header_rtsp_t;
 
@@ -68,7 +68,7 @@ typedef struct {
 typedef struct {
     char name[RTSP_HEADER_NAME_LEN];      // "Bandwidth"
     char colon_space[RTSP_SEPARATOR_LEN]; // ": "
-    int value;                            // 数值 (kbps)
+    int value;                           
     char crlf[RTSP_CRLF_LEN];
 } bandwidth_header_rtsp_t;
 
@@ -78,7 +78,7 @@ typedef struct {
 typedef struct {
     char name[RTSP_HEADER_NAME_LEN];      // "Blocksize"
     char colon_space[RTSP_SEPARATOR_LEN];
-    int value;                            // 字节数
+    int value;                         
     char crlf[RTSP_CRLF_LEN];
 } blocksize_header_rtsp_t;
 
@@ -98,7 +98,7 @@ typedef struct {
 typedef struct {
     char name[RTSP_HEADER_NAME_LEN];      // "Conference"
     char colon_space[RTSP_SEPARATOR_LEN];
-    char conference_id[64];               // 标识符
+    char conference_id[64];          
     char crlf[RTSP_CRLF_LEN];
 } conference_header_rtsp_t;
 
@@ -128,7 +128,7 @@ typedef struct {
 typedef struct {
     char name[RTSP_HEADER_NAME_LEN];      // "Content-Encoding"
     char colon_space[RTSP_SEPARATOR_LEN];
-    char encoding[32];                    // "gzip", "compress" 等
+    char encoding[32];                    // "gzip", "compress" 
     char crlf[RTSP_CRLF_LEN];
 } content_encoding_header_rtsp_t;
 
@@ -148,7 +148,7 @@ typedef struct {
 typedef struct {
     char name[RTSP_HEADER_NAME_LEN];      // "Content-Length"
     char colon_space[RTSP_SEPARATOR_LEN];
-    int length;                           // 正文长度
+    int length;                      
     char crlf[RTSP_CRLF_LEN];
 } content_length_header_rtsp_t;
 
@@ -180,7 +180,7 @@ typedef struct {
 typedef struct {
     char name[RTSP_HEADER_NAME_LEN];      // "CSeq"
     char colon_space[RTSP_SEPARATOR_LEN];
-    int number;                           // 请求序号
+    int number;                      
     char crlf[RTSP_CRLF_LEN];
 } cseq_header_rtsp_t;
 /* ===========================
@@ -206,7 +206,6 @@ typedef struct {
 
 /* ===========================
    20. Expires
-   同 Date 格式
    =========================== */
 typedef date_header_rtsp_t expires_header_rtsp_t;
 
@@ -222,13 +221,11 @@ typedef struct {
 
 /* ===========================
    22. If-Modified-Since
-   同 Date 格式
    =========================== */
 typedef date_header_rtsp_t if_modified_since_header_rtsp_t;
 
 /* ===========================
    23. Last-Modified
-   同 Date 格式
    =========================== */
 typedef date_header_rtsp_t last_modified_header_rtsp_t;
 
@@ -245,7 +242,6 @@ typedef struct {
 
 /* ===========================
    27. Range
-   NPT 格式: "npt=0-7.741"
    =========================== */
 typedef struct {
     char name[RTSP_HEADER_NAME_LEN];      // "Range"
@@ -285,7 +281,7 @@ typedef struct {
 typedef struct {
     char name[RTSP_HEADER_NAME_LEN];      // "Scale"
     char colon_space[RTSP_SEPARATOR_LEN];
-    float value;                          // 倍速播放
+    float value;                        
     char crlf[RTSP_CRLF_LEN];
 } scale_header_rtsp_t;
 
@@ -307,13 +303,12 @@ typedef struct {
 typedef struct {
     char name[RTSP_HEADER_NAME_LEN];      // "Speed"
     char colon_space[RTSP_SEPARATOR_LEN];
-    float value;                          // 播放速度倍数
+    float value;                        
     char crlf[RTSP_CRLF_LEN];
 } speed_header_rtsp_t;
 
 /* ===========================
    36. Transport
-   典型: "RTP/AVP;unicast;client_port=8000-8001"
    =========================== */
 typedef struct {
     char name[RTSP_HEADER_NAME_LEN];      // "Transport"
@@ -340,14 +335,13 @@ typedef struct {
 
 /* ===========================
    39. Via
-   典型: "RTSP/1.0 host"
    =========================== */
 typedef struct {
     char name[RTSP_HEADER_NAME_LEN];      // "Via"
     char colon_space[RTSP_SEPARATOR_LEN];
     char protocol[16];                    // "RTSP/1.0"
     char space;
-    char host[64];                        // 主机名
+    char host[64];                     
     char crlf[RTSP_CRLF_LEN];
 } via_header_rtsp_t;
 

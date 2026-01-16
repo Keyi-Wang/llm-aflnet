@@ -13,7 +13,6 @@
 #define SIP_TEXT_LEN         256   /* generic text field */
 #define SIP_DATE_LEN          64   /* RFC1123 date string */
 #define SIP_NUM_LEN           16   /* numbers stored as text */
-/* ===== 新增：通用 body 上限（可按需调大/调小） ===== */
 #ifndef SIP_BODY_MAX
 #define SIP_BODY_MAX 8192
 #endif
@@ -397,7 +396,7 @@ typedef struct {
   sip_user_agent_hdr_t           user_agent;
 
    /* ===== Message body ===== */
-  char body[SIP_BODY_MAX];                 /* 实体体；若 content_length/name 非空且 >0 则使用 */
+  char body[SIP_BODY_MAX];                
 
   /* ===== End of headers (empty line) ===== */
   char end_crlf[SIP_CRLF_LEN];           /* "\r\n" */
@@ -752,7 +751,7 @@ typedef struct {
   sip_timestamp_hdr_t         timestamp;          /* Timestamp: */
   sip_user_agent_hdr_t        user_agent;         /* User-Agent: */
 /* ===== Message body ===== */
-  char body[SIP_BODY_MAX];                 /* 实体体；若 content_length/name 非空且 >0 则使用 */
+  char body[SIP_BODY_MAX];                
   /* ===== End of headers (empty line) ===== */
   char end_crlf[SIP_CRLF_LEN];                    /* "\r\n" */
 } sip_options_packet_t;
