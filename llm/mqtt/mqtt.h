@@ -16,8 +16,8 @@ extern "C" {
 mqtt_packet_t* generate_mqtt_packets(int count);
 
 //mqtt_parser.c
-size_t parse_mqtt_msg(const uint8_t *buf, size_t buf_len,
-                      mqtt_packet_t *out_packets, size_t max_count);
+size_t parse_mqtt_msg(const uint8_t *buf, u32 buf_len,
+                      mqtt_packet_t *out_packets, u32 max_count);
 
 void print_mqtt_packets(const mqtt_packet_t *pkt, size_t index);
 

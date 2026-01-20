@@ -97,8 +97,8 @@ static int line_is_blank(const char *b, const char *e) {
     return 1;
 }
 
-size_t parse_ftp_msg(const uint8_t *buf, size_t buf_len,
-                     ftp_packet_t *out_packets, size_t max_count)
+size_t parse_ftp_msg(const uint8_t *buf, u32 buf_len,
+                     ftp_packet_t *out_packets, u32 max_count)
 {
     if (!buf || !out_packets || max_count == 0) return 0;
 

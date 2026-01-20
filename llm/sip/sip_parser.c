@@ -871,7 +871,7 @@ static size_t parse_single_message(const u8 *msg, size_t msg_len, sip_packet_t *
 
 
 
-size_t parse_sip_msg(const uint8_t *buf, size_t buf_len, sip_packet_t *out_packets, size_t max_count) {
+size_t parse_sip_msg(const uint8_t *buf, u32 buf_len, sip_packet_t *out_packets, u32 max_count) {
   if (!buf || !out_packets || !max_count) return 0;
   size_t count = 0;
   size_t off = 0;

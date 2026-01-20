@@ -461,7 +461,7 @@ int parse_pubcomp_packet(const uint8_t *buf, size_t len, mqtt_pubcomp_packet_t *
 }
 
 
-size_t parse_mqtt_msg(const uint8_t *buf, size_t buf_len, mqtt_packet_t *out_packets, size_t max_count) {
+size_t parse_mqtt_msg(const uint8_t *buf, u32 buf_len, mqtt_packet_t *out_packets, u32 max_count) {
     size_t offset = 0;
     size_t count = 0;
 

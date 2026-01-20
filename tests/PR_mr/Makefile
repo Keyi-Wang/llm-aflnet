@@ -61,4 +61,4 @@ mr_test: $(OBJS) $(PROTO_SRCS)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	rm -f mr_test $(OBJS)
+	rm -f mr_test $(OBJS) *.gcno *.gcda

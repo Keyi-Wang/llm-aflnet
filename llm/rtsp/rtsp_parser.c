@@ -593,8 +593,8 @@ static rtsp_type_t method_to_type(const char *method) {
     return RTSP_TYPE_UNKNOWN;
 }
 
-size_t parse_rtsp_msg(const uint8_t *buf, size_t buf_len,
-                           rtsp_packet_t *out_packets, size_t max_count) {
+size_t parse_rtsp_msg(const uint8_t *buf, u32 buf_len,
+                           rtsp_packet_t *out_packets, u32 max_count) {
     size_t offset = 0, count = 0;
 
     while (offset < buf_len && count < max_count) {

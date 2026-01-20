@@ -9,7 +9,7 @@
 
 ftp_packet_t* generate_ftp_packets(int count);
 
-size_t parse_ftp_msg(const uint8_t *buf, size_t buf_len, ftp_packet_t *out_packets, size_t max_count);
+size_t parse_ftp_msg(const uint8_t *buf, u32 buf_len, ftp_packet_t *out_packets, u32 max_count);
 
 int reassemble_ftp_msgs(const ftp_packet_t *packets, u32 num_packets, u8 *output_buf, u32 *out_len);
 

@@ -25,9 +25,10 @@ def main():
 
     # 粗匹配“函数定义”，抓 name 和 args（只考虑常见写法）
     func_def_re = re.compile(
-        r'(?ms)^[ \t]*(?:static[ \t]+)?(?:inline[ \t]+)?void[ \t]+'
+        r'(?ms)^[ \t]*(?:static[ \t]+)?(?:inline[ \t]+)?(?:void|int)[ \t]+'
         r'([A-Za-z_][A-Za-z0-9_]*)[ \t]*\(([^)]*)\)[ \t]*\{'
     )
+
 
     name_re = re.compile(args.name_regex)
     excl_re = re.compile(args.exclude_regex) if args.exclude_regex else None
