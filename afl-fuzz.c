@@ -4796,12 +4796,12 @@ static void maybe_update_plot_file(double bitmap_cvg, double eps) {
      execs_per_sec */
   stats_load_state();
   u32 M2_total_cnt = 0;
-  // if(strcmp(protocol_name, "MQTT") == 0) {
-  //   M2_total_cnt = M2_cal_cnt;
-  // } 
-  // else{
+  if(strcmp(protocol_name, "MQTT") == 0) {
+    M2_total_cnt = M2_cal_cnt;
+  } 
+  else{
     M2_total_cnt = g_pkt_total;
-  // }
+  }
   double ratio0 = (double)g_pkt_suc / (double)(M2_total_cnt ? M2_total_cnt : 1);
   double ratio1 = (double)g_pkt_sem_suc / (double)(M2_total_cnt ? M2_total_cnt : 1);
   double ratio2 = (double)g_pkt_gram_suc / (double)(M2_total_cnt ? M2_total_cnt : 1);
@@ -6279,7 +6279,6 @@ void region_calculate(int region_count, int M2_start_region_ID, int M2_region_co
 }
 
 
-/* === semantic 阶段总耗时统计 === */
 
 
 static inline uint64_t sem_now_ns(void) {
